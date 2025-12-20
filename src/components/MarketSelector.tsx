@@ -5,6 +5,7 @@ import { Input } from "@/components/ui/input";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { GoogleMap } from "@/components/GoogleMap";
+import { getAddressFromCoordinates } from "@/lib/geocoding";
 import {
   Dialog,
   DialogContent,
@@ -41,10 +42,28 @@ export function MarketSelector({ selectedMarket, onSelectMarket }: MarketSelecto
   const [creating, setCreating] = useState(false);
   const [newMarketName, setNewMarketName] = useState("");
   const [selectedLocation, setSelectedLocation] = useState<{ lat: number; lng: number } | null>(null);
+  const [fetchedAddress, setFetchedAddress] = useState<string | null>(null);
+  const [fetchingAddress, setFetchingAddress] = useState(false);
 
   useEffect(() => {
     fetchMarkets();
   }, []);
+
+  // Fetch address when location changes
+  useEffect(() => {
+    if (selectedLocation) {
+      setFetchingAddress(true);
+      getAddressFromCoordinates(selectedLocation.lat, selectedLocation.lng)
+        .then((address) => {
+          setFetchedAddress(address);
+        })
+        .finally(() => {
+          setFetchingAddress(false);
+        });
+    } else {
+      setFetchedAddress(null);
+    }
+  }, [selectedLocation]);
 
   const fetchMarkets = async () => {
     setLoading(true);
@@ -81,6 +100,7 @@ export function MarketSelector({ selectedMarket, onSelectMarket }: MarketSelecto
           name: newMarketName.trim(),
           latitude: selectedLocation.lat,
           longitude: selectedLocation.lng,
+          address: fetchedAddress,
         })
         .select()
         .single();
@@ -94,6 +114,7 @@ export function MarketSelector({ selectedMarket, onSelectMarket }: MarketSelecto
 
       setNewMarketName("");
       setSelectedLocation(null);
+      setFetchedAddress(null);
       setCreateDialogOpen(false);
       setMarkets([...markets, data]);
       onSelectMarket(data);
@@ -116,17 +137,24 @@ export function MarketSelector({ selectedMarket, onSelectMarket }: MarketSelecto
           <Button 
             variant="outline" 
             className={cn(
-              "w-full h-12 justify-between",
+              "w-full h-auto min-h-12 py-2 justify-between",
               selectedMarket && "border-primary text-primary"
             )}
           >
-            <div className="flex items-center gap-2">
-              <Store className="w-5 h-5" />
-              <span className="truncate">
-                {selectedMarket ? selectedMarket.name : "Selecionar mercado"}
-              </span>
+            <div className="flex items-center gap-2 text-left">
+              <Store className="w-5 h-5 flex-shrink-0" />
+              <div className="min-w-0">
+                <span className="block truncate">
+                  {selectedMarket ? selectedMarket.name : "Selecionar mercado"}
+                </span>
+                {selectedMarket?.address && (
+                  <span className="block text-xs text-muted-foreground truncate font-normal">
+                    {selectedMarket.address}
+                  </span>
+                )}
+              </div>
             </div>
-            <ChevronDown className="w-4 h-4 opacity-50" />
+            <ChevronDown className="w-4 h-4 opacity-50 flex-shrink-0" />
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent className="w-[calc(100vw-2rem)] max-w-sm" align="start">
@@ -144,12 +172,19 @@ export function MarketSelector({ selectedMarket, onSelectMarket }: MarketSelecto
                 key={market.id}
                 onClick={() => onSelectMarket(market)}
                 className={cn(
-                  "cursor-pointer",
+                  "cursor-pointer flex-col items-start",
                   selectedMarket?.id === market.id && "bg-accent"
                 )}
               >
-                <Store className="w-4 h-4 mr-2" />
-                {market.name}
+                <div className="flex items-center gap-2">
+                  <Store className="w-4 h-4" />
+                  <span>{market.name}</span>
+                </div>
+                {market.address && (
+                  <span className="text-xs text-muted-foreground ml-6 truncate max-w-full">
+                    {market.address}
+                  </span>
+                )}
               </DropdownMenuItem>
             ))
           )}
@@ -189,10 +224,24 @@ export function MarketSelector({ selectedMarket, onSelectMarket }: MarketSelecto
             </div>
 
             {selectedLocation && (
-              <p className="text-xs text-muted-foreground text-center flex items-center justify-center gap-1">
-                <MapPin className="w-3 h-3" />
-                {selectedLocation.lat.toFixed(4)}, {selectedLocation.lng.toFixed(4)}
-              </p>
+              <div className="text-center">
+                {fetchingAddress ? (
+                  <p className="text-xs text-muted-foreground flex items-center justify-center gap-1">
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                    Buscando endereço...
+                  </p>
+                ) : fetchedAddress ? (
+                  <p className="text-xs text-muted-foreground flex items-center justify-center gap-1">
+                    <MapPin className="w-3 h-3 flex-shrink-0" />
+                    <span className="truncate">{fetchedAddress}</span>
+                  </p>
+                ) : (
+                  <p className="text-xs text-muted-foreground flex items-center justify-center gap-1">
+                    <MapPin className="w-3 h-3" />
+                    {selectedLocation.lat.toFixed(4)}, {selectedLocation.lng.toFixed(4)}
+                  </p>
+                )}
+              </div>
             )}
 
             <Button
