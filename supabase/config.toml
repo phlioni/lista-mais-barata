@@ -1,1 +1,4 @@
 project_id = "xsdlrfdffocwzukvckzx"
+
+[functions.smart-shopping-analysis]
+verify_jwt = false

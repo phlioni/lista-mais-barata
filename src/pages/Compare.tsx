@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { ArrowLeft, MapPin, Loader2, Search } from "lucide-react";
+import { ArrowLeft, MapPin, Loader2, Search, Sparkles, Brain, AlertCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { RadiusSelector } from "@/components/RadiusSelector";
 import { MarketCard } from "@/components/MarketCard";
@@ -9,6 +9,7 @@ import { BottomNav } from "@/components/BottomNav";
 import { useAuth } from "@/hooks/useAuth";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
+import { cn } from "@/lib/utils";
 
 interface ListItem {
   id: string;
@@ -39,7 +40,23 @@ interface MarketResult {
   totalPrice: number;
   distance: number;
   missingItems: number;
-  products: Array<{ name: string; price: number | null }>;
+  totalItems: number;
+  products: Array<{ name: string; price: number | null; quantity: number }>;
+  travelCost?: number;
+  realCost?: number;
+  coveragePercent?: number;
+}
+
+interface SmartRecommendation {
+  type: string;
+  message: string;
+  markets: MarketResult[];
+  bestOption: MarketResult | null;
+  analysis: {
+    totalMarketsAnalyzed: number;
+    marketsWithPrices: number;
+    viableMarkets: number;
+  } | null;
 }
 
 // Haversine formula to calculate distance between two points
@@ -64,9 +81,11 @@ export default function Compare() {
   const [listName, setListName] = useState("");
   const [radius, setRadius] = useState(5);
   const [loading, setLoading] = useState(false);
+  const [analyzing, setAnalyzing] = useState(false);
   const [results, setResults] = useState<MarketResult[]>([]);
   const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null);
   const [hasSearched, setHasSearched] = useState(false);
+  const [smartRecommendation, setSmartRecommendation] = useState<SmartRecommendation | null>(null);
 
   useEffect(() => {
     if (!authLoading && !user) {
@@ -122,6 +141,7 @@ export default function Compare() {
 
     setLoading(true);
     setHasSearched(true);
+    setSmartRecommendation(null);
 
     try {
       // Fetch list items
@@ -194,7 +214,7 @@ export default function Compare() {
           market.longitude
         );
 
-        const productDetails: Array<{ name: string; price: number | null }> = [];
+        const productDetails: Array<{ name: string; price: number | null; quantity: number }> = [];
         let totalPrice = 0;
         let missingItems = 0;
 
@@ -207,14 +227,16 @@ export default function Compare() {
             const itemTotal = priceEntry.price * item.quantity;
             totalPrice += itemTotal;
             productDetails.push({
-              name: `${item.products.name} (x${item.quantity})`,
+              name: item.products.name,
               price: priceEntry.price,
+              quantity: item.quantity,
             });
           } else {
             missingItems++;
             productDetails.push({
-              name: `${item.products.name} (x${item.quantity})`,
+              name: item.products.name,
               price: null,
+              quantity: item.quantity,
             });
           }
         });
@@ -225,21 +247,17 @@ export default function Compare() {
           totalPrice,
           distance,
           missingItems,
+          totalItems: items.length,
           products: productDetails,
         };
       });
 
-      // Sort by total price (ascending), putting markets with all items first
-      marketResults.sort((a, b) => {
-        // If one has no missing items and the other does, prefer the complete one
-        if (a.missingItems === 0 && b.missingItems > 0) return -1;
-        if (b.missingItems === 0 && a.missingItems > 0) return 1;
-        // Otherwise sort by price
-        return a.totalPrice - b.totalPrice;
-      });
+      setResults(marketResults);
+      setLoading(false);
 
-      // Take top 5
-      setResults(marketResults.slice(0, 5));
+      // Now run smart analysis
+      await runSmartAnalysis(marketResults, userLocation);
+
     } catch (error) {
       console.error("Error comparing markets:", error);
       toast({
@@ -247,8 +265,40 @@ export default function Compare() {
         description: "Não foi possível comparar os preços",
         variant: "destructive",
       });
-    } finally {
       setLoading(false);
+    }
+  };
+
+  const runSmartAnalysis = async (markets: MarketResult[], location: { lat: number; lng: number }) => {
+    setAnalyzing(true);
+
+    try {
+      const response = await supabase.functions.invoke('smart-shopping-analysis', {
+        body: { markets, userLocation: location }
+      });
+
+      if (response.error) {
+        console.error('Smart analysis error:', response.error);
+        toast({
+          title: "Análise indisponível",
+          description: "Não foi possível gerar recomendações inteligentes",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      if (response.data?.recommendation) {
+        setSmartRecommendation(response.data.recommendation);
+        
+        // Update results with smart-sorted markets if available
+        if (response.data.recommendation.markets?.length > 0) {
+          setResults(response.data.recommendation.markets);
+        }
+      }
+    } catch (error) {
+      console.error('Error running smart analysis:', error);
+    } finally {
+      setAnalyzing(false);
     }
   };
 
@@ -301,17 +351,60 @@ export default function Compare() {
           onClick={compareMarkets}
           className="w-full h-14 mb-6"
           size="lg"
-          disabled={loading || !userLocation}
+          disabled={loading || analyzing || !userLocation}
         >
           {loading ? (
             <Loader2 className="w-5 h-5 animate-spin" />
+          ) : analyzing ? (
+            <>
+              <Brain className="w-5 h-5 animate-pulse" />
+              Analisando...
+            </>
           ) : (
             <>
-              <Search className="w-5 h-5" />
-              Buscar Melhores Preços
+              <Sparkles className="w-5 h-5" />
+              Buscar com IA
             </>
           )}
         </Button>
+
+        {/* Smart Recommendation */}
+        {smartRecommendation && smartRecommendation.type !== "no_data" && (
+          <div className="mb-6 animate-fade-in">
+            <div className="bg-gradient-to-br from-primary/10 via-primary/5 to-transparent rounded-2xl p-4 border border-primary/20">
+              <div className="flex items-center gap-2 mb-3">
+                <div className="p-2 bg-primary/20 rounded-lg">
+                  <Brain className="w-5 h-5 text-primary" />
+                </div>
+                <h3 className="font-semibold text-foreground">Análise Inteligente</h3>
+              </div>
+              <div className="prose prose-sm text-muted-foreground whitespace-pre-wrap">
+                {smartRecommendation.message}
+              </div>
+              {smartRecommendation.analysis && (
+                <div className="mt-4 pt-3 border-t border-border/50 flex gap-4 text-xs text-muted-foreground">
+                  <span>{smartRecommendation.analysis.totalMarketsAnalyzed} mercados analisados</span>
+                  <span>{smartRecommendation.analysis.viableMarkets} viáveis</span>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* No Data Message */}
+        {smartRecommendation?.type === "no_data" && (
+          <div className="mb-6 animate-fade-in">
+            <div className="bg-warning/10 rounded-2xl p-4 border border-warning/20">
+              <div className="flex items-center gap-2 mb-2">
+                <AlertCircle className="w-5 h-5 text-warning" />
+                <h3 className="font-semibold text-foreground">Sem dados suficientes</h3>
+              </div>
+              <p className="text-sm text-muted-foreground">
+                {smartRecommendation.message}
+              </p>
+            </div>
+          </div>
+        )}
 
         {/* Results */}
         {hasSearched && !loading && (
@@ -325,7 +418,10 @@ export default function Compare() {
             ) : (
               <div className="space-y-3">
                 <p className="text-sm font-medium text-foreground">
-                  Top {results.length} melhores preços:
+                  {smartRecommendation?.markets?.length 
+                    ? `Top ${results.length} recomendados:`
+                    : `${results.length} mercados encontrados:`
+                  }
                 </p>
                 {results.map((result, index) => (
                   <MarketCard
