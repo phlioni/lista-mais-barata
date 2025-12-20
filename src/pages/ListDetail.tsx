@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { ArrowLeft, Plus, Search, Scale, Loader2, X, ShoppingCart, Check, Store } from "lucide-react";
+import { ArrowLeft, Plus, Search, Scale, Loader2, X, ShoppingCart, Check, Store, CheckCircle2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ProductItem } from "@/components/ProductItem";
@@ -15,6 +15,7 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
+  DialogFooter,
 } from "@/components/ui/dialog";
 import {
   AlertDialog,
@@ -26,6 +27,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { cn } from "@/lib/utils";
 
 interface Product {
   id: string;
@@ -71,6 +73,8 @@ export default function ListDetail() {
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   const [addDialogOpen, setAddDialogOpen] = useState(false);
+  const [selectedProducts, setSelectedProducts] = useState<Set<string>>(new Set());
+  const [addingProducts, setAddingProducts] = useState(false);
   
   // Shopping mode state
   const [isShoppingMode, setIsShoppingMode] = useState(false);
@@ -145,54 +149,74 @@ export default function ListDetail() {
     }
   };
 
-  const addProduct = async (productId: string) => {
-    if (!id) return;
-
+  const toggleProductSelection = (productId: string) => {
     const existingItem = items.find((item) => item.product_id === productId);
-    if (existingItem) {
-      toast({
-        title: "Item já existe",
-        description: "Este produto já está na lista",
-      });
-      return;
-    }
+    if (existingItem) return; // Already in list
 
+    setSelectedProducts((prev) => {
+      const newSet = new Set(prev);
+      if (newSet.has(productId)) {
+        newSet.delete(productId);
+      } else {
+        newSet.add(productId);
+      }
+      return newSet;
+    });
+  };
+
+  const addSelectedProducts = async () => {
+    if (!id || selectedProducts.size === 0) return;
+
+    setAddingProducts(true);
     try {
+      const productsToAdd = Array.from(selectedProducts);
+      const insertData = productsToAdd.map((productId) => ({
+        list_id: id,
+        product_id: productId,
+        quantity: 1,
+        is_checked: false,
+      }));
+
       const { data, error } = await supabase
         .from("list_items")
-        .insert({
-          list_id: id,
-          product_id: productId,
-          quantity: 1,
-          is_checked: false,
-        })
+        .insert(insertData)
         .select(`
           id,
           product_id,
           quantity,
           is_checked,
           products (id, name, brand)
-        `)
-        .single();
+        `);
 
       if (error) throw error;
-      
-      setItems([...items, data as ListItem]);
+
+      setItems([...items, ...(data as ListItem[])]);
+      setSelectedProducts(new Set());
       setAddDialogOpen(false);
       setSearchQuery("");
-      
+
       toast({
-        title: "Item adicionado",
-        description: `${(data as ListItem).products.name} foi adicionado à lista`,
+        title: "Itens adicionados",
+        description: `${data.length} ${data.length === 1 ? "produto adicionado" : "produtos adicionados"} à lista`,
       });
     } catch (error) {
-      console.error("Error adding product:", error);
+      console.error("Error adding products:", error);
       toast({
         title: "Erro",
-        description: "Não foi possível adicionar o item",
+        description: "Não foi possível adicionar os itens",
         variant: "destructive",
       });
+    } finally {
+      setAddingProducts(false);
     }
+  };
+
+  const closeAddDialog = (open: boolean) => {
+    if (!open) {
+      setSelectedProducts(new Set());
+      setSearchQuery("");
+    }
+    setAddDialogOpen(open);
   };
 
   const toggleCheck = async (itemId: string) => {
@@ -518,10 +542,17 @@ export default function ListDetail() {
       )}
 
       {/* Add Product Dialog */}
-      <Dialog open={addDialogOpen} onOpenChange={setAddDialogOpen}>
+      <Dialog open={addDialogOpen} onOpenChange={closeAddDialog}>
         <DialogContent className="max-w-sm mx-4 rounded-2xl max-h-[80vh] overflow-hidden flex flex-col">
           <DialogHeader>
-            <DialogTitle className="font-display">Adicionar Produto</DialogTitle>
+            <DialogTitle className="font-display">
+              Adicionar Produtos
+              {selectedProducts.size > 0 && (
+                <span className="ml-2 text-sm font-normal text-primary">
+                  ({selectedProducts.size} selecionado{selectedProducts.size > 1 ? "s" : ""})
+                </span>
+              )}
+            </DialogTitle>
           </DialogHeader>
           <div className="space-y-4 mt-4 flex-1 overflow-hidden flex flex-col">
             <div className="relative">
@@ -545,20 +576,74 @@ export default function ListDetail() {
             </div>
             
             <div className="flex-1 overflow-y-auto -mx-6 px-6 space-y-1">
-              {filteredProducts.map((product) => (
-                <button
-                  key={product.id}
-                  onClick={() => addProduct(product.id)}
-                  className="w-full p-3 text-left rounded-xl hover:bg-accent transition-colors"
-                >
-                  <p className="font-medium text-foreground">{product.name}</p>
-                  {product.brand && (
-                    <p className="text-sm text-muted-foreground">{product.brand}</p>
-                  )}
-                </button>
-              ))}
+              {filteredProducts.map((product) => {
+                const isInList = items.some((item) => item.product_id === product.id);
+                const isSelected = selectedProducts.has(product.id);
+                
+                return (
+                  <button
+                    key={product.id}
+                    onClick={() => toggleProductSelection(product.id)}
+                    disabled={isInList}
+                    className={cn(
+                      "w-full p-3 text-left rounded-xl transition-colors flex items-center gap-3",
+                      isInList 
+                        ? "opacity-50 cursor-not-allowed bg-muted" 
+                        : isSelected 
+                          ? "bg-primary/10 border-2 border-primary" 
+                          : "hover:bg-accent border-2 border-transparent"
+                    )}
+                  >
+                    <div className={cn(
+                      "flex items-center justify-center w-6 h-6 rounded-full border-2 flex-shrink-0 transition-all",
+                      isInList 
+                        ? "border-muted-foreground/30 bg-muted-foreground/10" 
+                        : isSelected 
+                          ? "border-primary bg-primary" 
+                          : "border-muted-foreground/30"
+                    )}>
+                      {(isInList || isSelected) && (
+                        <Check className={cn(
+                          "w-4 h-4",
+                          isInList ? "text-muted-foreground" : "text-primary-foreground"
+                        )} />
+                      )}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className={cn(
+                        "font-medium",
+                        isInList ? "text-muted-foreground" : "text-foreground"
+                      )}>
+                        {product.name}
+                      </p>
+                      <p className="text-sm text-muted-foreground">
+                        {isInList ? "Já está na lista" : product.brand || ""}
+                      </p>
+                    </div>
+                  </button>
+                );
+              })}
             </div>
           </div>
+          
+          {selectedProducts.size > 0 && (
+            <DialogFooter className="mt-4">
+              <Button
+                onClick={addSelectedProducts}
+                className="w-full h-12"
+                disabled={addingProducts}
+              >
+                {addingProducts ? (
+                  <Loader2 className="w-5 h-5 animate-spin" />
+                ) : (
+                  <>
+                    <Plus className="w-5 h-5" />
+                    Adicionar {selectedProducts.size} {selectedProducts.size === 1 ? "Produto" : "Produtos"}
+                  </>
+                )}
+              </Button>
+            </DialogFooter>
+          )}
         </DialogContent>
       </Dialog>
 
