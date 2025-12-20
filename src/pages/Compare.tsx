@@ -328,15 +328,16 @@ export default function Compare() {
                   Top {results.length} melhores preços:
                 </p>
                 {results.map((result, index) => (
-                  <div key={result.id} style={{ animationDelay: `${index * 100}ms` }}>
-                    <MarketCard
-                      name={result.name}
-                      totalPrice={result.totalPrice}
-                      distance={result.distance}
-                      missingItems={result.missingItems}
-                      products={result.products}
-                    />
-                  </div>
+                  <MarketCard
+                    key={result.id}
+                    id={result.id}
+                    listId={id!}
+                    name={result.name}
+                    totalPrice={result.totalPrice}
+                    distance={result.distance}
+                    missingItems={result.missingItems}
+                    rank={index + 1}
+                  />
                 ))}
               </div>
             )}

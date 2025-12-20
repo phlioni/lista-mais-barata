@@ -10,6 +10,7 @@ import ListDetail from "./pages/ListDetail";
 import Markets from "./pages/Markets";
 import Profile from "./pages/Profile";
 import Compare from "./pages/Compare";
+import MarketDetail from "./pages/MarketDetail";
 import PriceManager from "./pages/PriceManager";
 import NotFound from "./pages/NotFound";
 
@@ -29,6 +30,7 @@ const App = () => (
             <Route path="/mercados" element={<Markets />} />
             <Route path="/perfil" element={<Profile />} />
             <Route path="/comparar/:id" element={<Compare />} />
+            <Route path="/mercado/:marketId/:listId" element={<MarketDetail />} />
             <Route path="/precos" element={<PriceManager />} />
             <Route path="*" element={<NotFound />} />
           </Routes>
