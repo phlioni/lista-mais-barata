@@ -1,12 +1,13 @@
 import { useState, useEffect } from "react";
 import { useParams, useNavigate, useSearchParams } from "react-router-dom";
-import { ArrowLeft, MapPin, Navigation, Store, ExternalLink, AlertTriangle, Loader2 } from "lucide-react";
+import { ArrowLeft, MapPin, Navigation, Store, ExternalLink, AlertTriangle, Loader2, ShoppingCart } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { BottomNav } from "@/components/BottomNav";
 import { useAuth } from "@/hooks/useAuth";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
+import { getAddressFromCoordinates } from "@/lib/geocoding";
 
 interface Market {
   id: string;
@@ -62,7 +63,22 @@ export default function MarketDetail() {
         .single();
 
       if (marketError) throw marketError;
-      setMarket(marketData);
+      
+      // If market has no address, try to fetch it
+      let marketWithAddress = marketData;
+      if (!marketData.address) {
+        const address = await getAddressFromCoordinates(marketData.latitude, marketData.longitude);
+        if (address) {
+          // Update market with address in database
+          await supabase
+            .from("markets")
+            .update({ address })
+            .eq("id", marketId);
+          marketWithAddress = { ...marketData, address };
+        }
+      }
+      
+      setMarket(marketWithAddress);
 
       // Fetch list items with products
       const { data: itemsData, error: itemsError } = await supabase
@@ -115,6 +131,12 @@ export default function MarketDetail() {
     if (!market) return;
     const url = `https://www.google.com/maps/dir/?api=1&destination=${market.latitude},${market.longitude}`;
     window.open(url, "_blank");
+  };
+
+  const useThisList = () => {
+    if (!market || !listId) return;
+    // Navigate to list detail with market pre-selected and prices from this market
+    navigate(`/lista/${listId}?marketId=${market.id}&usePrices=true`);
   };
 
   const calculatedTotal = products.reduce((acc, p) => {
@@ -173,24 +195,34 @@ export default function MarketDetail() {
             </div>
             <div className="flex-1">
               <h2 className="font-semibold text-foreground">{market.name}</h2>
-              {market.address && (
+              {market.address ? (
                 <p className="text-sm text-muted-foreground">{market.address}</p>
+              ) : (
+                <p className="text-sm text-muted-foreground">
+                  📍 {market.latitude.toFixed(5)}, {market.longitude.toFixed(5)}
+                </p>
               )}
-              <p className="text-xs text-muted-foreground mt-1">
-                📍 {market.latitude.toFixed(5)}, {market.longitude.toFixed(5)}
-              </p>
             </div>
           </div>
 
-          <Button
-            onClick={openGoogleMaps}
-            className="w-full h-12"
-            variant="outline"
-          >
-            <Navigation className="w-5 h-5" />
-            Abrir no Google Maps
-            <ExternalLink className="w-4 h-4 ml-auto" />
-          </Button>
+          <div className="flex flex-col gap-2">
+            <Button
+              onClick={useThisList}
+              className="w-full h-12"
+            >
+              <ShoppingCart className="w-5 h-5" />
+              Usar Esta Lista
+            </Button>
+            <Button
+              onClick={openGoogleMaps}
+              className="w-full h-12"
+              variant="outline"
+            >
+              <Navigation className="w-5 h-5" />
+              Abrir no Google Maps
+              <ExternalLink className="w-4 h-4 ml-auto" />
+            </Button>
+          </div>
         </div>
 
         {/* Price Summary */}

@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { useParams, useNavigate, useSearchParams } from "react-router-dom";
 import { ArrowLeft, Plus, Search, Scale, Loader2, X, ShoppingCart, Check, Store, CheckCircle2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -63,9 +63,13 @@ interface ItemPrice {
 
 export default function ListDetail() {
   const { id } = useParams<{ id: string }>();
+  const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const { user, loading: authLoading } = useAuth();
   const { toast } = useToast();
+  
+  const preselectedMarketId = searchParams.get("marketId");
+  const usePrices = searchParams.get("usePrices") === "true";
   
   const [list, setList] = useState<ShoppingList | null>(null);
   const [items, setItems] = useState<ListItem[]>([]);
@@ -93,8 +97,13 @@ export default function ListDetail() {
     if (user && id) {
       fetchListData();
       fetchProducts();
+      
+      // If we have a preselected market, load it with prices
+      if (preselectedMarketId && usePrices) {
+        loadMarketWithPrices(preselectedMarketId);
+      }
     }
-  }, [user, id]);
+  }, [user, id, preselectedMarketId, usePrices]);
 
   const fetchListData = async () => {
     if (!id) return;
@@ -146,6 +155,68 @@ export default function ListDetail() {
       setProducts(data || []);
     } catch (error) {
       console.error("Error fetching products:", error);
+    }
+  };
+
+  const loadMarketWithPrices = async (marketId: string) => {
+    try {
+      // Fetch market info
+      const { data: marketData, error: marketError } = await supabase
+        .from("markets")
+        .select("*")
+        .eq("id", marketId)
+        .single();
+
+      if (marketError) throw marketError;
+      setSelectedMarket(marketData);
+
+      // Wait for items to load, then fetch prices
+      const { data: itemsData, error: itemsError } = await supabase
+        .from("list_items")
+        .select("id, product_id")
+        .eq("list_id", id);
+
+      if (itemsError) throw itemsError;
+
+      const productIds = itemsData.map((item: any) => item.product_id);
+      
+      // Fetch prices for this market
+      const { data: pricesData, error: pricesError } = await supabase
+        .from("market_prices")
+        .select("product_id, price")
+        .eq("market_id", marketId)
+        .in("product_id", productIds);
+
+      if (pricesError) throw pricesError;
+
+      // Create a map of product_id -> item_id, then set prices
+      const productToItem: { [productId: string]: string } = {};
+      itemsData.forEach((item: any) => {
+        productToItem[item.product_id] = item.id;
+      });
+
+      const prices: ItemPrice = {};
+      pricesData.forEach((price: any) => {
+        const itemId = productToItem[price.product_id];
+        if (itemId) {
+          prices[itemId] = price.price;
+        }
+      });
+
+      setItemPrices(prices);
+      setIsShoppingMode(true);
+
+      toast({
+        title: "Lista carregada",
+        description: `Preços de ${marketData.name} carregados`,
+      });
+    } catch (error) {
+      console.error("Error loading market with prices:", error);
+      toast({
+        title: "Erro",
+        description: "Não foi possível carregar os preços",
+        variant: "destructive",
+      });
     }
   };
 
