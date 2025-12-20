@@ -10,6 +10,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
+import { getAddressFromCoordinates } from "@/lib/geocoding";
 import {
   Dialog,
   DialogContent,
@@ -37,6 +38,8 @@ export default function Markets() {
   const [creating, setCreating] = useState(false);
   const [newMarketName, setNewMarketName] = useState("");
   const [selectedLocation, setSelectedLocation] = useState<{ lat: number; lng: number } | null>(null);
+  const [fetchedAddress, setFetchedAddress] = useState<string | null>(null);
+  const [fetchingAddress, setFetchingAddress] = useState(false);
 
   useEffect(() => {
     if (!authLoading && !user) {
@@ -49,6 +52,22 @@ export default function Markets() {
       fetchMarkets();
     }
   }, [user]);
+
+  // Fetch address when location changes
+  useEffect(() => {
+    if (selectedLocation) {
+      setFetchingAddress(true);
+      getAddressFromCoordinates(selectedLocation.lat, selectedLocation.lng)
+        .then((address) => {
+          setFetchedAddress(address);
+        })
+        .finally(() => {
+          setFetchingAddress(false);
+        });
+    } else {
+      setFetchedAddress(null);
+    }
+  }, [selectedLocation]);
 
   const fetchMarkets = async () => {
     setLoading(true);
@@ -90,6 +109,7 @@ export default function Markets() {
           name: newMarketName.trim(),
           latitude: selectedLocation.lat,
           longitude: selectedLocation.lng,
+          address: fetchedAddress,
         })
         .select()
         .single();
@@ -103,6 +123,7 @@ export default function Markets() {
 
       setNewMarketName("");
       setSelectedLocation(null);
+      setFetchedAddress(null);
       setDialogOpen(false);
       fetchMarkets();
     } catch (error) {
@@ -164,9 +185,23 @@ export default function Markets() {
                 </div>
 
                 {selectedLocation && (
-                  <p className="text-xs text-muted-foreground text-center">
-                    📍 Lat: {selectedLocation.lat.toFixed(4)}, Lng: {selectedLocation.lng.toFixed(4)}
-                  </p>
+                  <div className="text-center">
+                    {fetchingAddress ? (
+                      <p className="text-xs text-muted-foreground flex items-center justify-center gap-1">
+                        <Loader2 className="w-3 h-3 animate-spin" />
+                        Buscando endereço...
+                      </p>
+                    ) : fetchedAddress ? (
+                      <p className="text-xs text-muted-foreground flex items-center justify-center gap-1">
+                        <MapPin className="w-3 h-3 flex-shrink-0" />
+                        <span className="truncate">{fetchedAddress}</span>
+                      </p>
+                    ) : (
+                      <p className="text-xs text-muted-foreground">
+                        📍 {selectedLocation.lat.toFixed(4)}, {selectedLocation.lng.toFixed(4)}
+                      </p>
+                    )}
+                  </div>
                 )}
 
                 <Button
@@ -222,9 +257,9 @@ export default function Markets() {
                 </div>
                 <div className="flex-1 min-w-0">
                   <h3 className="font-semibold text-foreground">{market.name}</h3>
-                  <p className="text-sm text-muted-foreground flex items-center gap-1">
-                    <MapPin className="w-3 h-3" />
-                    {market.latitude.toFixed(4)}, {market.longitude.toFixed(4)}
+                  <p className="text-sm text-muted-foreground flex items-center gap-1 truncate">
+                    <MapPin className="w-3 h-3 flex-shrink-0" />
+                    {market.address || `${market.latitude.toFixed(4)}, ${market.longitude.toFixed(4)}`}
                   </p>
                 </div>
               </div>
