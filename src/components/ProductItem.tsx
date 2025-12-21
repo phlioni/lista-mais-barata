@@ -1,7 +1,8 @@
-import { Check, Minus, Plus, Trash2 } from "lucide-react";
-import { Button } from "./ui/button";
-import { Input } from "./ui/input";
+import { Minus, Plus, Trash2, Check } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
+import { memo } from "react";
 
 interface ProductItemProps {
   id: string;
@@ -11,105 +12,135 @@ interface ProductItemProps {
   isChecked: boolean;
   price?: number;
   showPriceInput?: boolean;
+  readonly?: boolean;
   onToggleCheck: (id: string) => void;
   onUpdateQuantity: (id: string, quantity: number) => void;
-  onUpdatePrice?: (id: string, price: number) => void;
+  onUpdatePrice: (id: string, price: number) => void;
   onRemove: (id: string) => void;
 }
 
-export function ProductItem({
+export const ProductItem = memo(function ProductItem({
   id,
   name,
   brand,
   quantity,
   isChecked,
   price,
-  showPriceInput = false,
+  showPriceInput,
+  readonly = false,
   onToggleCheck,
   onUpdateQuantity,
   onUpdatePrice,
   onRemove,
 }: ProductItemProps) {
+
   return (
-    <div className={cn(
-      "flex flex-col gap-2 p-3 bg-card rounded-xl border border-border",
-      "transition-all duration-200",
-      isChecked && "bg-muted/50 border-muted"
-    )}>
-      <div className="flex items-center gap-3">
+    <div
+      className={cn(
+        "group relative flex flex-col gap-3 p-4 rounded-xl border transition-all duration-200 bg-card",
+        isChecked ? "border-transparent bg-muted/40" : "border-border/50 shadow-sm",
+        readonly && "opacity-90 pointer-events-none" // Menor opacidade para indicar estado
+      )}
+    >
+      <div className="flex items-start gap-3">
+        {/* Checkbox Area */}
         <button
-          onClick={() => onToggleCheck(id)}
+          onClick={() => !readonly && onToggleCheck(id)}
+          disabled={readonly}
           className={cn(
-            "flex items-center justify-center w-6 h-6 rounded-full border-2 transition-all duration-200 flex-shrink-0",
-            isChecked 
-              ? "bg-primary border-primary" 
-              : "border-muted-foreground/30 hover:border-primary"
+            "mt-0.5 flex h-6 w-6 items-center justify-center rounded-full border-2 transition-all duration-200 flex-shrink-0",
+            isChecked
+              ? "border-transparent bg-primary text-primary-foreground"
+              : "border-muted-foreground/30 hover:border-primary/50",
+            readonly && isChecked && "bg-muted-foreground border-transparent opacity-50"
           )}
         >
-          {isChecked && <Check className="w-4 h-4 text-primary-foreground" />}
+          {isChecked && <Check className="h-3.5 w-3.5" strokeWidth={3} />}
         </button>
-        
-        <div className="flex-1 min-w-0">
-          <p className={cn(
-            "font-medium text-foreground transition-all duration-200",
-            isChecked && "text-muted-foreground line-through"
+
+        {/* Product Info */}
+        <div className="flex-1 min-w-0 pt-0.5">
+          <h3 className={cn(
+            "font-medium leading-tight transition-all text-base",
+            isChecked ? "text-muted-foreground line-through decoration-border/50" : "text-foreground"
           )}>
             {name}
-          </p>
+          </h3>
           {brand && (
-            <p className="text-xs text-muted-foreground">{brand}</p>
+            <p className="text-sm text-muted-foreground mt-0.5 truncate">{brand}</p>
           )}
         </div>
-        
-        <div className="flex items-center gap-1">
+
+        {/* Remove Button (Only if not readonly) */}
+        {!readonly && (
           <Button
             variant="ghost"
             size="icon"
-            className="h-8 w-8"
-            onClick={() => onUpdateQuantity(id, Math.max(1, quantity - 1))}
+            onClick={() => onRemove(id)}
+            className="h-8 w-8 text-muted-foreground/50 hover:text-destructive hover:bg-destructive/10 -mt-1 -mr-1"
           >
-            <Minus className="w-4 h-4" />
+            <Trash2 className="w-4 h-4" />
           </Button>
-          <span className="w-8 text-center font-medium text-foreground">{quantity}</span>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-8 w-8"
-            onClick={() => onUpdateQuantity(id, quantity + 1)}
-          >
-            <Plus className="w-4 h-4" />
-          </Button>
-        </div>
-        
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-8 w-8 text-destructive hover:text-destructive hover:bg-destructive/10 flex-shrink-0"
-          onClick={() => onRemove(id)}
-        >
-          <Trash2 className="w-4 h-4" />
-        </Button>
+        )}
       </div>
-      
-      {showPriceInput && (
-        <div className="flex items-center gap-2 pl-9">
-          <span className="text-sm text-muted-foreground">R$</span>
-          <Input
-            type="number"
-            step="0.01"
-            min="0"
-            placeholder="0,00"
-            value={price || ""}
-            onChange={(e) => onUpdatePrice?.(id, parseFloat(e.target.value) || 0)}
-            className="h-9 w-24 text-right"
-          />
-          {price && price > 0 && quantity > 1 && (
-            <span className="text-xs text-muted-foreground">
-              = R$ {(price * quantity).toFixed(2)}
-            </span>
+
+      {/* Controls Area (Price & Quantity) */}
+      <div className="flex items-center justify-between gap-3 pl-9">
+        {/* Price Input (Only in Shopping Mode) or Static Price */}
+        {showPriceInput ? (
+          <div className="flex items-center gap-2 flex-1 max-w-[140px]">
+            <span className="text-sm font-medium text-muted-foreground">R$</span>
+            <Input
+              type="number"
+              inputMode="decimal"
+              placeholder="0,00"
+              value={price || ""}
+              onChange={(e) => onUpdatePrice(id, parseFloat(e.target.value))}
+              className="h-10 px-3 text-right font-medium tabular-nums rounded-lg bg-background/50 focus:bg-background"
+              disabled={readonly}
+            />
+          </div>
+        ) : (
+          <div className="text-sm font-semibold text-primary">
+            {price && price > 0 ? `R$ ${price.toFixed(2)}` : ""}
+          </div>
+        )}
+
+        {/* Quantity Controls */}
+        <div className={cn(
+          "flex items-center rounded-lg p-0.5 border border-transparent transition-colors ml-auto",
+          !readonly ? "bg-secondary/50 hover:border-border/50" : ""
+        )}>
+          {!readonly ? (
+            <>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => onUpdateQuantity(id, Math.max(1, quantity - 1))}
+                className="h-8 w-8 rounded-md hover:bg-background shadow-sm"
+                disabled={quantity <= 1}
+              >
+                <Minus className="w-3.5 h-3.5" />
+              </Button>
+              <span className="w-8 text-center text-sm font-medium tabular-nums">
+                {quantity}
+              </span>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => onUpdateQuantity(id, quantity + 1)}
+                className="h-8 w-8 rounded-md hover:bg-background shadow-sm"
+              >
+                <Plus className="w-3.5 h-3.5" />
+              </Button>
+            </>
+          ) : (
+            <div className="px-2 py-1 text-xs font-medium text-muted-foreground bg-muted/50 rounded-md">
+              Qtd: {quantity}
+            </div>
           )}
         </div>
-      )}
+      </div>
     </div>
   );
-}
+});

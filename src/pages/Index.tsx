@@ -50,7 +50,7 @@ export default function Index() {
 
   const fetchLists = async () => {
     if (!user) return;
-    
+
     setLoading(true);
     try {
       const { data: listsData, error: listsError } = await supabase
@@ -106,11 +106,6 @@ export default function Index() {
 
       if (error) throw error;
 
-      toast({
-        title: "Lista criada!",
-        description: `"${data.name}" foi adicionada`,
-      });
-
       setNewListName("");
       setDialogOpen(false);
       fetchLists();
@@ -139,39 +134,40 @@ export default function Index() {
   }
 
   return (
-    <div className="min-h-screen bg-background pb-24">
+    <div className="min-h-screen bg-background pb-32">
       <PageHeader
         title="Minhas Listas"
         subtitle="Gerencie suas compras"
         action={
           <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
             <DialogTrigger asChild>
-              <Button size="icon" variant="ghost" className="text-primary">
+              <Button size="icon" variant="ghost" className="text-primary h-10 w-10">
                 <Plus className="w-6 h-6" />
               </Button>
             </DialogTrigger>
-            <DialogContent className="max-w-sm mx-4 rounded-2xl">
+            <DialogContent className="w-[90%] max-w-sm mx-auto rounded-2xl p-6">
               <DialogHeader>
-                <DialogTitle className="font-display">Criar Nova Lista</DialogTitle>
+                <DialogTitle className="font-display text-xl text-center">Criar Nova Lista</DialogTitle>
               </DialogHeader>
               <div className="space-y-4 mt-4">
                 <Input
                   placeholder="Ex: Compras da Semana"
                   value={newListName}
                   onChange={(e) => setNewListName(e.target.value)}
-                  className="h-12 rounded-xl"
+                  className="h-14 rounded-xl text-lg"
                   onKeyDown={(e) => e.key === "Enter" && createList()}
+                  autoFocus
                 />
                 <Button
                   onClick={createList}
-                  className="w-full h-12"
+                  className="w-full h-14 rounded-xl text-lg font-medium"
                   disabled={!newListName.trim() || creating}
                 >
                   {creating ? (
-                    <Loader2 className="w-5 h-5 animate-spin" />
+                    <Loader2 className="w-6 h-6 animate-spin" />
                   ) : (
                     <>
-                      <Plus className="w-5 h-5" />
+                      <Plus className="w-5 h-5 mr-2" />
                       Criar Lista
                     </>
                   )}
@@ -189,25 +185,25 @@ export default function Index() {
           </div>
         ) : lists.length === 0 ? (
           <EmptyState
-            icon={<ShoppingBag className="w-8 h-8 text-primary" />}
+            icon={<ShoppingBag className="w-10 h-10 text-primary" />}
             title="Nenhuma lista ainda"
             description="Crie sua primeira lista de compras e comece a economizar"
             action={
-              <Button onClick={() => setDialogOpen(true)}>
-                <Plus className="w-5 h-5" />
+              <Button onClick={() => setDialogOpen(true)} className="h-12 px-6 rounded-xl">
+                <Plus className="w-5 h-5 mr-2" />
                 Criar Lista
               </Button>
             }
           />
         ) : (
-          <div className="space-y-3">
+          <div className="space-y-3 pb-4">
             {lists.map((list, index) => (
               <div key={list.id} style={{ animationDelay: `${index * 50}ms` }}>
                 <ListCard
                   id={list.id}
                   name={list.name}
                   itemCount={list.item_count}
-                  status={list.status as "open" | "closed"}
+                  status={list.status} // Passando direto a string do banco
                   createdAt={list.created_at}
                 />
               </div>

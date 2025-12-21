@@ -53,7 +53,6 @@ export default function Markets() {
     }
   }, [user]);
 
-  // Fetch address when location changes
   useEffect(() => {
     if (selectedLocation) {
       setFetchingAddress(true);
@@ -116,10 +115,7 @@ export default function Markets() {
 
       if (error) throw error;
 
-      toast({
-        title: "Mercado cadastrado!",
-        description: `"${data.name}" foi adicionado`,
-      });
+      // Toast removido
 
       setNewMarketName("");
       setSelectedLocation(null);
@@ -173,7 +169,7 @@ export default function Markets() {
                   onChange={(e) => setNewMarketName(e.target.value)}
                   className="h-12 rounded-xl"
                 />
-                
+
                 <div>
                   <p className="text-sm text-muted-foreground mb-2">
                     Selecione a localização:

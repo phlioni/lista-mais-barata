@@ -1,6 +1,9 @@
 import { useState, useEffect } from "react";
 import { useParams, useNavigate, useSearchParams } from "react-router-dom";
-import { ArrowLeft, Plus, Search, Scale, Loader2, X, ShoppingCart, Check, Store, CheckCircle2 } from "lucide-react";
+import {
+  ArrowLeft, Plus, Search, Scale, Loader2, X, ShoppingCart,
+  Check, Store, Copy, Lock, MoreVertical, Pencil, Trash2
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ProductItem } from "@/components/ProductItem";
@@ -15,7 +18,6 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
-  DialogFooter,
 } from "@/components/ui/dialog";
 import {
   AlertDialog,
@@ -27,6 +29,13 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 
 interface Product {
@@ -46,7 +55,8 @@ interface ListItem {
 interface ShoppingList {
   id: string;
   name: string;
-  status: string;
+  status: string; // 'open', 'shopping', 'closed'
+  market_id?: string | null;
 }
 
 interface Market {
@@ -67,25 +77,40 @@ export default function ListDetail() {
   const navigate = useNavigate();
   const { user, loading: authLoading } = useAuth();
   const { toast } = useToast();
-  
+
   const preselectedMarketId = searchParams.get("marketId");
   const usePrices = searchParams.get("usePrices") === "true";
-  
+
   const [list, setList] = useState<ShoppingList | null>(null);
   const [items, setItems] = useState<ListItem[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
+
+  // Dialogs
   const [addDialogOpen, setAddDialogOpen] = useState(false);
+  const [duplicateDialogOpen, setDuplicateDialogOpen] = useState(false);
+  const [finishDialogOpen, setFinishDialogOpen] = useState(false);
+
+  const [editNameDialogOpen, setEditNameDialogOpen] = useState(false);
+  const [deleteListDialogOpen, setDeleteListDialogOpen] = useState(false);
+  const [editingName, setEditingName] = useState("");
+  const [isUpdating, setIsUpdating] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+
   const [selectedProducts, setSelectedProducts] = useState<Set<string>>(new Set());
   const [addingProducts, setAddingProducts] = useState(false);
-  
+
   // Shopping mode state
   const [isShoppingMode, setIsShoppingMode] = useState(false);
   const [selectedMarket, setSelectedMarket] = useState<Market | null>(null);
   const [itemPrices, setItemPrices] = useState<ItemPrice>({});
   const [saving, setSaving] = useState(false);
-  const [finishDialogOpen, setFinishDialogOpen] = useState(false);
+  const [startingShopping, setStartingShopping] = useState(false); // Loading state for start button
+
+  // Duplication state
+  const [newListName, setNewListName] = useState("");
+  const [duplicating, setDuplicating] = useState(false);
 
   useEffect(() => {
     if (!authLoading && !user) {
@@ -95,20 +120,25 @@ export default function ListDetail() {
 
   useEffect(() => {
     if (user && id) {
-      fetchListData();
-      fetchProducts();
-      
-      // If we have a preselected market, load it with prices
-      if (preselectedMarketId && usePrices) {
-        loadMarketWithPrices(preselectedMarketId);
-      }
+      const init = async () => {
+        setLoading(true);
+        await Promise.all([fetchListData(), fetchProducts()]);
+        setLoading(false);
+      };
+      init();
     }
-  }, [user, id, preselectedMarketId, usePrices]);
+  }, [user, id]);
+
+  useEffect(() => {
+    // Only load from URL if NOT already shopping and NOT closed
+    if (preselectedMarketId && usePrices && list && list.status === 'open') {
+      loadMarketWithPrices(preselectedMarketId, true);
+    }
+  }, [preselectedMarketId, usePrices, list]);
 
   const fetchListData = async () => {
     if (!id) return;
-    
-    setLoading(true);
+
     try {
       const { data: listData, error: listError } = await supabase
         .from("shopping_lists")
@@ -118,6 +148,8 @@ export default function ListDetail() {
 
       if (listError) throw listError;
       setList(listData);
+      setNewListName(`Cópia de ${listData.name}`);
+      setEditingName(listData.name);
 
       const { data: itemsData, error: itemsError } = await supabase
         .from("list_items")
@@ -128,10 +160,23 @@ export default function ListDetail() {
           is_checked,
           products (id, name, brand)
         `)
-        .eq("list_id", id);
+        .eq("list_id", id)
+        .order("created_at");
 
       if (itemsError) throw itemsError;
       setItems(itemsData as ListItem[]);
+
+      // LÓGICA DE ESTADO PERSISTENTE:
+      // Se status for 'closed', carrega mercado para leitura.
+      // Se status for 'shopping', carrega mercado e ATIVA modo compras.
+      if (listData.market_id) {
+        if (listData.status === 'closed') {
+          await loadMarketWithPrices(listData.market_id, false);
+        } else if (listData.status === 'shopping') {
+          await loadMarketWithPrices(listData.market_id, true); // true = ativa isShoppingMode
+        }
+      }
+
     } catch (error) {
       console.error("Error fetching list:", error);
       toast({
@@ -139,8 +184,6 @@ export default function ListDetail() {
         description: "Não foi possível carregar a lista",
         variant: "destructive",
       });
-    } finally {
-      setLoading(false);
     }
   };
 
@@ -158,9 +201,8 @@ export default function ListDetail() {
     }
   };
 
-  const loadMarketWithPrices = async (marketId: string) => {
+  const loadMarketWithPrices = async (marketId: string, enableShoppingMode: boolean = false) => {
     try {
-      // Fetch market info
       const { data: marketData, error: marketError } = await supabase
         .from("markets")
         .select("*")
@@ -170,59 +212,105 @@ export default function ListDetail() {
       if (marketError) throw marketError;
       setSelectedMarket(marketData);
 
-      // Wait for items to load, then fetch prices
-      const { data: itemsData, error: itemsError } = await supabase
+      const { data: listItems } = await supabase
         .from("list_items")
         .select("id, product_id")
         .eq("list_id", id);
 
-      if (itemsError) throw itemsError;
+      if (listItems && listItems.length > 0) {
+        const productIds = listItems.map((i: any) => i.product_id);
 
-      const productIds = itemsData.map((item: any) => item.product_id);
-      
-      // Fetch prices for this market
-      const { data: pricesData, error: pricesError } = await supabase
-        .from("market_prices")
-        .select("product_id, price")
-        .eq("market_id", marketId)
-        .in("product_id", productIds);
+        const { data: pricesData } = await supabase
+          .from("market_prices")
+          .select("product_id, price")
+          .eq("market_id", marketId)
+          .in("product_id", productIds);
 
-      if (pricesError) throw pricesError;
+        if (pricesData) {
+          const productToItem: { [productId: string]: string } = {};
+          listItems.forEach((item: any) => {
+            productToItem[item.product_id] = item.id;
+          });
 
-      // Create a map of product_id -> item_id, then set prices
-      const productToItem: { [productId: string]: string } = {};
-      itemsData.forEach((item: any) => {
-        productToItem[item.product_id] = item.id;
-      });
-
-      const prices: ItemPrice = {};
-      pricesData.forEach((price: any) => {
-        const itemId = productToItem[price.product_id];
-        if (itemId) {
-          prices[itemId] = price.price;
+          const prices: ItemPrice = {};
+          pricesData.forEach((price: any) => {
+            const itemId = productToItem[price.product_id];
+            if (itemId) {
+              prices[itemId] = price.price;
+            }
+          });
+          setItemPrices(prices);
         }
-      });
+      }
 
-      setItemPrices(prices);
-      setIsShoppingMode(true);
+      if (enableShoppingMode) {
+        setIsShoppingMode(true);
+      }
 
-      toast({
-        title: "Lista carregada",
-        description: `Preços de ${marketData.name} carregados`,
-      });
     } catch (error) {
-      console.error("Error loading market with prices:", error);
+      console.error("Error loading market prices:", error);
       toast({
-        title: "Erro",
-        description: "Não foi possível carregar os preços",
+        title: "Erro ao carregar preços",
+        description: "Tente novamente mais tarde",
         variant: "destructive",
       });
     }
   };
 
+  const updateListName = async () => {
+    if (!id || !editingName.trim()) return;
+
+    setIsUpdating(true);
+    try {
+      const { error } = await supabase
+        .from("shopping_lists")
+        .update({ name: editingName.trim() })
+        .eq("id", id);
+
+      if (error) throw error;
+
+      setList((prev) => prev ? { ...prev, name: editingName.trim() } : null);
+      setEditNameDialogOpen(false);
+    } catch (error) {
+      console.error("Error updating list name:", error);
+      toast({
+        title: "Erro ao atualizar",
+        description: "Não foi possível mudar o nome da lista",
+        variant: "destructive",
+      });
+    } finally {
+      setIsUpdating(false);
+    }
+  };
+
+  const deleteList = async () => {
+    if (!id) return;
+
+    setIsDeleting(true);
+    try {
+      const { error } = await supabase
+        .from("shopping_lists")
+        .delete()
+        .eq("id", id);
+
+      if (error) throw error;
+
+      navigate("/");
+    } catch (error) {
+      console.error("Error deleting list:", error);
+      toast({
+        title: "Erro ao excluir",
+        description: "Tente novamente",
+        variant: "destructive",
+      });
+      setIsDeleting(false);
+    }
+  };
+
+  // --- Função RESTAURADA ---
   const toggleProductSelection = (productId: string) => {
     const existingItem = items.find((item) => item.product_id === productId);
-    if (existingItem) return; // Already in list
+    if (existingItem) return;
 
     setSelectedProducts((prev) => {
       const newSet = new Set(prev);
@@ -234,6 +322,7 @@ export default function ListDetail() {
       return newSet;
     });
   };
+  // --------------------------
 
   const addSelectedProducts = async () => {
     if (!id || selectedProducts.size === 0) return;
@@ -266,10 +355,6 @@ export default function ListDetail() {
       setAddDialogOpen(false);
       setSearchQuery("");
 
-      toast({
-        title: "Itens adicionados",
-        description: `${data.length} ${data.length === 1 ? "produto adicionado" : "produtos adicionados"} à lista`,
-      });
     } catch (error) {
       console.error("Error adding products:", error);
       toast({
@@ -291,26 +376,40 @@ export default function ListDetail() {
   };
 
   const toggleCheck = async (itemId: string) => {
+    if (list?.status === 'closed') return;
+
     const item = items.find((i) => i.id === itemId);
     if (!item) return;
+
+    const newCheckedState = !item.is_checked;
+    setItems(items.map((i) =>
+      i.id === itemId ? { ...i, is_checked: newCheckedState } : i
+    ));
 
     try {
       const { error } = await supabase
         .from("list_items")
-        .update({ is_checked: !item.is_checked })
+        .update({ is_checked: newCheckedState })
         .eq("id", itemId);
 
-      if (error) throw error;
-      
-      setItems(items.map((i) => 
-        i.id === itemId ? { ...i, is_checked: !i.is_checked } : i
-      ));
+      if (error) {
+        setItems(items.map((i) =>
+          i.id === itemId ? { ...i, is_checked: !newCheckedState } : i
+        ));
+        throw error;
+      }
     } catch (error) {
       console.error("Error toggling check:", error);
     }
   };
 
   const updateQuantity = async (itemId: string, quantity: number) => {
+    if (list?.status === 'closed') return;
+
+    setItems(items.map((i) =>
+      i.id === itemId ? { ...i, quantity } : i
+    ));
+
     try {
       const { error } = await supabase
         .from("list_items")
@@ -318,16 +417,13 @@ export default function ListDetail() {
         .eq("id", itemId);
 
       if (error) throw error;
-      
-      setItems(items.map((i) => 
-        i.id === itemId ? { ...i, quantity } : i
-      ));
     } catch (error) {
       console.error("Error updating quantity:", error);
     }
   };
 
   const updatePrice = (itemId: string, price: number) => {
+    if (list?.status === 'closed') return;
     setItemPrices((prev) => ({
       ...prev,
       [itemId]: price,
@@ -335,6 +431,8 @@ export default function ListDetail() {
   };
 
   const removeItem = async (itemId: string) => {
+    if (list?.status === 'closed') return;
+
     try {
       const { error } = await supabase
         .from("list_items")
@@ -342,37 +440,83 @@ export default function ListDetail() {
         .eq("id", itemId);
 
       if (error) throw error;
-      
+
       setItems(items.filter((i) => i.id !== itemId));
-      toast({
-        title: "Item removido",
-      });
     } catch (error) {
       console.error("Error removing item:", error);
+      toast({ title: "Erro ao remover item", variant: "destructive" });
     }
   };
 
-  const startShopping = () => {
-    if (!selectedMarket) {
+  const startShopping = async () => {
+    if (!selectedMarket || !id) {
       toast({
         title: "Selecione um mercado",
-        description: "Escolha ou cadastre o mercado onde você está fazendo compras",
+        description: "Escolha o mercado para iniciar as compras",
         variant: "destructive",
       });
       return;
     }
-    setIsShoppingMode(true);
-    // Reset all checks
-    items.forEach((item) => {
-      if (item.is_checked) {
-        toggleCheck(item.id);
-      }
-    });
+
+    setStartingShopping(true);
+    try {
+      // 1. Persistir o estado 'shopping' e o mercado no banco
+      const { error } = await supabase
+        .from("shopping_lists")
+        .update({
+          status: 'shopping',
+          market_id: selectedMarket.id
+        })
+        .eq("id", id);
+
+      if (error) throw error;
+
+      // 2. Atualizar estado local
+      setList(prev => prev ? { ...prev, status: 'shopping', market_id: selectedMarket.id } : null);
+      setIsShoppingMode(true);
+      loadMarketWithPrices(selectedMarket.id, true);
+
+      // Opcional: Marcar itens já checados, se houver lógica para isso
+      items.forEach((item) => {
+        if (item.is_checked) {
+          toggleCheck(item.id);
+        }
+      });
+    } catch (error) {
+      console.error("Error starting shopping:", error);
+      toast({
+        title: "Erro ao iniciar",
+        description: "Não foi possível salvar o status da lista.",
+        variant: "destructive"
+      });
+    } finally {
+      setStartingShopping(false);
+    }
   };
 
-  const cancelShopping = () => {
-    setIsShoppingMode(false);
-    setItemPrices({});
+  const cancelShopping = async () => {
+    if (!id) return;
+
+    // Ao cancelar, voltamos para 'open', mas podemos decidir se limpamos o market_id ou não.
+    // Geralmente limpar é melhor para resetar o fluxo.
+    try {
+      const { error } = await supabase
+        .from("shopping_lists")
+        .update({
+          status: 'open',
+          // market_id: null // Opcional: comentar se quiser manter o último mercado selecionado
+        })
+        .eq("id", id);
+
+      if (error) throw error;
+
+      setList(prev => prev ? { ...prev, status: 'open' } : null);
+      setIsShoppingMode(false);
+    } catch (error) {
+      console.error("Error cancelling shopping:", error);
+      // Fallback local se der erro no banco, para não travar o usuário
+      setIsShoppingMode(false);
+    }
   };
 
   const finishShopping = async () => {
@@ -393,16 +537,13 @@ export default function ListDetail() {
 
     setSaving(true);
     try {
-      // Prepare price records
       const priceRecords = itemsWithPrices.map((item) => ({
         market_id: selectedMarket.id,
         product_id: item.product_id,
         price: itemPrices[item.id],
       }));
 
-      // Upsert prices (update if exists, insert if not)
       for (const record of priceRecords) {
-        // Check if price exists for this market + product
         const { data: existing } = await supabase
           .from("market_prices")
           .select("id")
@@ -411,41 +552,84 @@ export default function ListDetail() {
           .maybeSingle();
 
         if (existing) {
-          // Update existing price
           await supabase
             .from("market_prices")
             .update({ price: record.price, created_at: new Date().toISOString() })
             .eq("id", existing.id);
         } else {
-          // Insert new price
           await supabase
             .from("market_prices")
             .insert(record);
         }
       }
 
-      // Close the list
       await supabase
         .from("shopping_lists")
-        .update({ status: "closed" })
+        .update({
+          status: "closed",
+          market_id: selectedMarket.id
+        })
         .eq("id", id);
 
-      toast({
-        title: "Compras finalizadas!",
-        description: `${itemsWithPrices.length} preços salvos em ${selectedMarket.name}`,
-      });
-
+      setList(prev => prev ? { ...prev, status: "closed", market_id: selectedMarket.id } : null);
       setFinishDialogOpen(false);
-      navigate("/");
+      setIsShoppingMode(false);
+
     } catch (error) {
       console.error("Error saving prices:", error);
       toast({
-        title: "Erro",
-        description: "Não foi possível salvar os preços",
+        title: "Erro ao finalizar",
+        description: "Verifique a conexão.",
         variant: "destructive",
       });
     } finally {
       setSaving(false);
+    }
+  };
+
+  const duplicateList = async () => {
+    if (!user || !list || !newListName.trim()) return;
+
+    setDuplicating(true);
+    try {
+      const { data: newList, error: createError } = await supabase
+        .from("shopping_lists")
+        .insert({
+          name: newListName.trim(),
+          user_id: user.id,
+          status: "open",
+        })
+        .select()
+        .single();
+
+      if (createError) throw createError;
+
+      const newItems = items.map(item => ({
+        list_id: newList.id,
+        product_id: item.product_id,
+        quantity: item.quantity,
+        is_checked: false
+      }));
+
+      if (newItems.length > 0) {
+        const { error: insertError } = await supabase
+          .from("list_items")
+          .insert(newItems);
+
+        if (insertError) throw insertError;
+      }
+
+      setDuplicateDialogOpen(false);
+      navigate(`/lista/${newList.id}`);
+
+    } catch (error) {
+      console.error("Error duplicating list:", error);
+      toast({
+        title: "Erro ao duplicar",
+        variant: "destructive",
+      });
+    } finally {
+      setDuplicating(false);
     }
   };
 
@@ -461,6 +645,7 @@ export default function ListDetail() {
   }, 0);
 
   const checkedCount = items.filter((i) => i.is_checked).length;
+  const isClosed = list?.status === 'closed';
 
   if (authLoading || loading) {
     return (
@@ -479,39 +664,81 @@ export default function ListDetail() {
   }
 
   return (
-    <div className="min-h-screen bg-background pb-32">
+    <div className="min-h-screen bg-background pb-36 md:pb-32">
       {/* Header */}
-      <header className="sticky top-0 z-40 bg-background/80 backdrop-blur-lg border-b border-border">
-        <div className="flex items-center gap-3 px-4 py-4 max-w-md mx-auto">
+      <header className="sticky top-0 z-40 bg-background/90 backdrop-blur-lg border-b border-border transition-all">
+        <div className="flex items-center gap-2 px-4 py-4 max-w-md mx-auto">
           <Button
             variant="ghost"
             size="icon"
             onClick={() => navigate("/")}
+            className="h-10 w-10 -ml-2"
           >
             <ArrowLeft className="w-5 h-5" />
           </Button>
-          <div className="flex-1">
-            <h1 className="text-lg font-display font-bold text-foreground">{list.name}</h1>
-            <p className="text-sm text-muted-foreground">
-              {isShoppingMode 
-                ? `${checkedCount}/${items.length} itens • R$ ${totalPrice.toFixed(2)}`
-                : `${items.length} ${items.length === 1 ? "item" : "itens"}`
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2">
+              <h1 className="text-lg font-display font-bold text-foreground truncate">{list.name}</h1>
+              {isClosed && <Lock className="w-3 h-3 text-muted-foreground" />}
+            </div>
+            <p className="text-sm text-muted-foreground truncate">
+              {isClosed
+                ? (totalPrice > 0 ? `Total final: R$ ${totalPrice.toFixed(2)}` : "Lista Fechada")
+                : isShoppingMode
+                  ? `${checkedCount}/${items.length} itens • R$ ${totalPrice.toFixed(2)}`
+                  : `${items.length} ${items.length === 1 ? "item" : "itens"}`
               }
             </p>
           </div>
-          {!isShoppingMode && (
-            <Button onClick={() => setAddDialogOpen(true)} size="icon" variant="ghost" className="text-primary">
-              <Plus className="w-6 h-6" />
-            </Button>
-          )}
+
+          <div className="flex items-center gap-1">
+            {!isShoppingMode && !isClosed && (
+              <Button
+                onClick={() => setAddDialogOpen(true)}
+                size="icon"
+                variant="secondary"
+                className="h-10 w-10 rounded-xl text-primary"
+              >
+                <Plus className="w-6 h-6" />
+              </Button>
+            )}
+
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="icon" className="h-10 w-10">
+                  <MoreVertical className="w-5 h-5 text-muted-foreground" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-48 rounded-xl">
+                <DropdownMenuItem onClick={() => setEditNameDialogOpen(true)}>
+                  <Pencil className="w-4 h-4 mr-2" />
+                  Editar Nome
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  onClick={() => setDeleteListDialogOpen(true)}
+                  className="text-destructive focus:text-destructive"
+                >
+                  <Trash2 className="w-4 h-4 mr-2" />
+                  Excluir Lista
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
         </div>
-        
-        {/* Shopping mode indicator */}
-        {isShoppingMode && selectedMarket && (
+
+        {(isShoppingMode || (isClosed && selectedMarket)) && selectedMarket && (
           <div className="px-4 pb-3 max-w-md mx-auto">
-            <div className="flex items-center gap-2 p-2 bg-primary/10 rounded-lg text-primary text-sm">
+            <div className={cn(
+              "flex items-center gap-2 p-2 rounded-lg text-sm border",
+              isClosed
+                ? "bg-muted text-muted-foreground border-border"
+                : "bg-primary/10 text-primary border-primary/20"
+            )}>
               <Store className="w-4 h-4" />
-              <span className="font-medium">Comprando em: {selectedMarket.name}</span>
+              <span className="font-medium truncate">
+                {isClosed ? `Comprado em: ${selectedMarket.name}` : `Comprando em: ${selectedMarket.name}`}
+              </span>
             </div>
           </div>
         )}
@@ -519,10 +746,9 @@ export default function ListDetail() {
 
       {/* Items */}
       <main className="px-4 py-4 max-w-md mx-auto">
-        {/* Market selector (only when not in shopping mode) */}
-        {!isShoppingMode && items.length > 0 && (
-          <div className="mb-4">
-            <p className="text-sm text-muted-foreground mb-2">
+        {!isShoppingMode && !isClosed && items.length > 0 && (
+          <div className="mb-6 animate-fade-in">
+            <p className="text-sm text-muted-foreground mb-2 ml-1">
               Onde você vai fazer as compras?
             </p>
             <MarketSelector
@@ -534,18 +760,18 @@ export default function ListDetail() {
 
         {items.length === 0 ? (
           <EmptyState
-            icon={<Plus className="w-8 h-8 text-primary" />}
+            icon={<Plus className="w-10 h-10 text-primary" />}
             title="Lista vazia"
             description="Adicione produtos à sua lista para começar"
-            action={
-              <Button onClick={() => setAddDialogOpen(true)}>
-                <Plus className="w-5 h-5" />
+            action={!isClosed && (
+              <Button onClick={() => setAddDialogOpen(true)} className="h-12 px-6 rounded-xl">
+                <Plus className="w-5 h-5 mr-2" />
                 Adicionar Produto
               </Button>
-            }
+            )}
           />
         ) : (
-          <div className="space-y-2">
+          <div className={cn("space-y-3", isClosed && "opacity-95")}>
             {items.map((item) => (
               <ProductItem
                 key={item.id}
@@ -555,7 +781,8 @@ export default function ListDetail() {
                 quantity={item.quantity}
                 isChecked={item.is_checked}
                 price={itemPrices[item.id]}
-                showPriceInput={isShoppingMode}
+                showPriceInput={isShoppingMode && !isClosed}
+                readonly={isClosed}
                 onToggleCheck={toggleCheck}
                 onUpdateQuantity={updateQuantity}
                 onUpdatePrice={updatePrice}
@@ -566,44 +793,59 @@ export default function ListDetail() {
         )}
       </main>
 
-      {/* Fixed bottom actions */}
+      {/* Bottom Actions */}
       {items.length > 0 && (
-        <div className="fixed bottom-20 left-0 right-0 p-4 bg-background/80 backdrop-blur-lg border-t border-border">
-          <div className="max-w-md mx-auto space-y-2">
-            {!isShoppingMode ? (
+        <div className="fixed bottom-[4.5rem] md:bottom-20 left-0 right-0 p-4 bg-background/80 backdrop-blur-xl border-t border-border z-30">
+          <div className="max-w-md mx-auto space-y-3">
+            {isClosed ? (
+              <Button
+                onClick={() => setDuplicateDialogOpen(true)}
+                className="w-full h-14 rounded-xl text-lg font-medium shadow-lg shadow-primary/20"
+                size="lg"
+              >
+                <Copy className="w-5 h-5 mr-2" />
+                Utilizar Novamente
+              </Button>
+            ) : !isShoppingMode ? (
               <>
                 <Button
                   onClick={startShopping}
-                  className="w-full h-14"
+                  className="w-full h-14 rounded-xl text-lg font-medium shadow-lg shadow-primary/20"
                   size="lg"
-                  disabled={!selectedMarket}
+                  disabled={!selectedMarket || startingShopping}
                 >
-                  <ShoppingCart className="w-5 h-5" />
-                  Iniciar Compras
+                  {startingShopping ? (
+                    <Loader2 className="w-5 h-5 animate-spin" />
+                  ) : (
+                    <>
+                      <ShoppingCart className="w-5 h-5 mr-2" />
+                      Iniciar Compras
+                    </>
+                  )}
                 </Button>
                 <Button
                   onClick={() => navigate(`/comparar/${id}`)}
                   variant="outline"
-                  className="w-full h-12"
+                  className="w-full h-12 rounded-xl border-border bg-background/50"
                 >
-                  <Scale className="w-5 h-5" />
+                  <Scale className="w-5 h-5 mr-2" />
                   Comparar Preços
                 </Button>
               </>
             ) : (
-              <div className="flex gap-2">
+              <div className="flex gap-3">
                 <Button
                   onClick={cancelShopping}
                   variant="outline"
-                  className="flex-1 h-14"
+                  className="flex-1 h-14 rounded-xl"
                 >
                   Cancelar
                 </Button>
                 <Button
                   onClick={() => setFinishDialogOpen(true)}
-                  className="flex-1 h-14"
+                  className="flex-1 h-14 rounded-xl shadow-lg shadow-primary/20"
                 >
-                  <Check className="w-5 h-5" />
+                  <Check className="w-5 h-5 mr-2" />
                   Finalizar
                 </Button>
               </div>
@@ -612,141 +854,235 @@ export default function ListDetail() {
         </div>
       )}
 
+      {/* Edit List Name Dialog */}
+      <Dialog open={editNameDialogOpen} onOpenChange={setEditNameDialogOpen}>
+        <DialogContent className="w-[90%] max-w-sm mx-auto rounded-2xl p-6">
+          <DialogHeader>
+            <DialogTitle className="font-display text-xl text-center">Editar Nome</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 mt-2">
+            <Input
+              value={editingName}
+              onChange={(e) => setEditingName(e.target.value)}
+              placeholder="Nome da lista"
+              className="h-12 rounded-xl text-base"
+              autoFocus
+            />
+            <Button
+              onClick={updateListName}
+              className="w-full h-12 rounded-xl text-base font-medium"
+              disabled={!editingName.trim() || isUpdating}
+            >
+              {isUpdating ? (
+                <Loader2 className="w-5 h-5 animate-spin" />
+              ) : (
+                "Salvar"
+              )}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete List Confirmation */}
+      <AlertDialog open={deleteListDialogOpen} onOpenChange={setDeleteListDialogOpen}>
+        <AlertDialogContent className="w-[90%] max-w-sm mx-auto rounded-2xl p-6">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="font-display text-xl text-destructive">Excluir Lista?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Tem certeza que deseja apagar a lista <strong>"{list.name}"</strong>? Essa ação não pode ser desfeita.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter className="flex-row gap-3 space-x-0 mt-4">
+            <AlertDialogCancel disabled={isDeleting} className="flex-1 h-12 rounded-xl mt-0">
+              Cancelar
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={deleteList}
+              disabled={isDeleting}
+              className="flex-1 h-12 rounded-xl bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              {isDeleting ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                "Excluir"
+              )}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Duplicate List Dialog */}
+      <Dialog open={duplicateDialogOpen} onOpenChange={setDuplicateDialogOpen}>
+        <DialogContent className="w-[90%] max-w-sm mx-auto rounded-2xl p-6">
+          <DialogHeader>
+            <DialogTitle className="font-display text-xl text-center">Nova Lista</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 mt-2">
+            <p className="text-sm text-muted-foreground text-center">
+              Dê um nome para a nova lista baseada em <strong>"{list.name}"</strong>
+            </p>
+            <Input
+              value={newListName}
+              onChange={(e) => setNewListName(e.target.value)}
+              placeholder="Nome da lista"
+              className="h-12 rounded-xl text-base"
+              autoFocus
+            />
+            <Button
+              onClick={duplicateList}
+              className="w-full h-12 rounded-xl text-base font-medium"
+              disabled={!newListName.trim() || duplicating}
+            >
+              {duplicating ? (
+                <Loader2 className="w-5 h-5 animate-spin" />
+              ) : (
+                <>
+                  <Copy className="w-4 h-4 mr-2" />
+                  Criar e Abrir
+                </>
+              )}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       {/* Add Product Dialog */}
       <Dialog open={addDialogOpen} onOpenChange={closeAddDialog}>
-        <DialogContent className="max-w-sm mx-4 rounded-2xl max-h-[80vh] overflow-hidden flex flex-col">
-          <DialogHeader>
-            <DialogTitle className="font-display">
+        <DialogContent className="w-[95%] max-w-sm mx-auto rounded-2xl h-[85vh] p-0 gap-0 overflow-hidden flex flex-col">
+          <DialogHeader className="p-4 pb-2 border-b border-border/50 bg-background z-10">
+            <DialogTitle className="font-display text-xl">
               Adicionar Produtos
               {selectedProducts.size > 0 && (
-                <span className="ml-2 text-sm font-normal text-primary">
-                  ({selectedProducts.size} selecionado{selectedProducts.size > 1 ? "s" : ""})
+                <span className="ml-2 text-sm font-normal text-primary bg-primary/10 px-2 py-0.5 rounded-full">
+                  {selectedProducts.size}
                 </span>
               )}
             </DialogTitle>
           </DialogHeader>
-          <div className="space-y-4 mt-4 flex-1 overflow-hidden flex flex-col">
+
+          <div className="p-4 pb-2 bg-background z-10">
             <div className="relative">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground" />
               <Input
                 placeholder="Buscar produto..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="pl-10 h-12 rounded-xl"
+                className="pl-10 h-12 rounded-xl bg-secondary/50 border-transparent focus:bg-background focus:border-primary transition-all"
+                autoFocus
               />
               {searchQuery && (
                 <Button
                   variant="ghost"
                   size="icon"
-                  className="absolute right-1 top-1/2 -translate-y-1/2 h-8 w-8"
+                  className="absolute right-1 top-1/2 -translate-y-1/2 h-8 w-8 hover:bg-transparent"
                   onClick={() => setSearchQuery("")}
                 >
                   <X className="w-4 h-4" />
                 </Button>
               )}
             </div>
-            
-            <div className="flex-1 overflow-y-auto -mx-6 px-6 space-y-1">
-              {filteredProducts.map((product) => {
-                const isInList = items.some((item) => item.product_id === product.id);
-                const isSelected = selectedProducts.has(product.id);
-                
-                return (
-                  <button
-                    key={product.id}
-                    onClick={() => toggleProductSelection(product.id)}
-                    disabled={isInList}
-                    className={cn(
-                      "w-full p-3 text-left rounded-xl transition-colors flex items-center gap-3",
-                      isInList 
-                        ? "opacity-50 cursor-not-allowed bg-muted" 
-                        : isSelected 
-                          ? "bg-primary/10 border-2 border-primary" 
-                          : "hover:bg-accent border-2 border-transparent"
-                    )}
-                  >
-                    <div className={cn(
-                      "flex items-center justify-center w-6 h-6 rounded-full border-2 flex-shrink-0 transition-all",
-                      isInList 
-                        ? "border-muted-foreground/30 bg-muted-foreground/10" 
-                        : isSelected 
-                          ? "border-primary bg-primary" 
-                          : "border-muted-foreground/30"
-                    )}>
-                      {(isInList || isSelected) && (
-                        <Check className={cn(
-                          "w-4 h-4",
-                          isInList ? "text-muted-foreground" : "text-primary-foreground"
-                        )} />
-                      )}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <p className={cn(
-                        "font-medium",
-                        isInList ? "text-muted-foreground" : "text-foreground"
-                      )}>
-                        {product.name}
-                      </p>
-                      <p className="text-sm text-muted-foreground">
-                        {isInList ? "Já está na lista" : product.brand || ""}
-                      </p>
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
           </div>
-          
-          {selectedProducts.size > 0 && (
-            <DialogFooter className="mt-4">
-              <Button
-                onClick={addSelectedProducts}
-                className="w-full h-12"
-                disabled={addingProducts}
-              >
-                {addingProducts ? (
-                  <Loader2 className="w-5 h-5 animate-spin" />
-                ) : (
-                  <>
-                    <Plus className="w-5 h-5" />
-                    Adicionar {selectedProducts.size} {selectedProducts.size === 1 ? "Produto" : "Produtos"}
-                  </>
-                )}
-              </Button>
-            </DialogFooter>
-          )}
+
+          <div className="flex-1 overflow-y-auto px-4 py-2 space-y-2">
+            {filteredProducts.map((product) => {
+              const isInList = items.some((item) => item.product_id === product.id);
+              const isSelected = selectedProducts.has(product.id);
+
+              return (
+                <button
+                  key={product.id}
+                  onClick={() => toggleProductSelection(product.id)}
+                  disabled={isInList}
+                  className={cn(
+                    "w-full p-4 text-left rounded-xl transition-all duration-200 flex items-center gap-3 active:scale-[0.99]",
+                    isInList
+                      ? "opacity-60 cursor-not-allowed bg-muted/50"
+                      : isSelected
+                        ? "bg-primary/10 ring-2 ring-primary ring-inset"
+                        : "bg-card border border-border hover:border-primary/50"
+                  )}
+                >
+                  <div className={cn(
+                    "flex items-center justify-center w-6 h-6 rounded-full border-2 flex-shrink-0 transition-all",
+                    isInList
+                      ? "border-muted-foreground/30 bg-muted-foreground/10"
+                      : isSelected
+                        ? "border-primary bg-primary"
+                        : "border-muted-foreground/30"
+                  )}>
+                    {(isInList || isSelected) && (
+                      <Check className={cn(
+                        "w-3.5 h-3.5",
+                        isInList ? "text-muted-foreground" : "text-primary-foreground"
+                      )} />
+                    )}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className={cn(
+                      "font-medium truncate text-base",
+                      isInList ? "text-muted-foreground" : "text-foreground"
+                    )}>
+                      {product.name}
+                    </p>
+                    <p className="text-sm text-muted-foreground truncate">
+                      {isInList ? "Já está na lista" : product.brand || "Sem marca"}
+                    </p>
+                  </div>
+                </button>
+              );
+            })}
+
+            {filteredProducts.length === 0 && (
+              <div className="py-8 text-center text-muted-foreground">
+                <p>Nenhum produto encontrado</p>
+              </div>
+            )}
+          </div>
+
+          <div className="p-4 border-t border-border bg-background z-10">
+            <Button
+              onClick={addSelectedProducts}
+              className="w-full h-14 rounded-xl text-lg font-medium shadow-md"
+              disabled={selectedProducts.size === 0 || addingProducts}
+            >
+              {addingProducts ? (
+                <Loader2 className="w-6 h-6 animate-spin" />
+              ) : (
+                <>
+                  <Plus className="w-5 h-5 mr-2" />
+                  Adicionar {selectedProducts.size > 0 ? `${selectedProducts.size} produtos` : "Produtos"}
+                </>
+              )}
+            </Button>
+          </div>
         </DialogContent>
       </Dialog>
 
-      {/* Finish Shopping Confirmation */}
       <AlertDialog open={finishDialogOpen} onOpenChange={setFinishDialogOpen}>
-        <AlertDialogContent className="max-w-sm mx-4 rounded-2xl">
+        <AlertDialogContent className="w-[90%] max-w-sm mx-auto rounded-2xl p-6">
           <AlertDialogHeader>
-            <AlertDialogTitle className="font-display">Finalizar Compras?</AlertDialogTitle>
-            <AlertDialogDescription className="space-y-2">
+            <AlertDialogTitle className="font-display text-xl">Finalizar Compras?</AlertDialogTitle>
+            <AlertDialogDescription className="space-y-3">
               <p>
-                Os preços informados serão salvos para <strong>{selectedMarket?.name}</strong>.
+                Os preços informados serão salvos e a lista será <strong>fechada</strong>.
               </p>
-              <div className="bg-muted p-3 rounded-lg">
-                <p className="text-lg font-bold text-foreground">
-                  Total: R$ {totalPrice.toFixed(2)}
+              <div className="bg-muted/50 p-4 rounded-xl border border-border/50">
+                <p className="text-2xl font-bold text-foreground text-center">
+                  R$ {totalPrice.toFixed(2)}
                 </p>
-                <p className="text-sm text-muted-foreground">
+                <p className="text-sm text-muted-foreground text-center mt-1">
                   {Object.keys(itemPrices).filter((k) => itemPrices[k] > 0).length} produtos com preço
                 </p>
               </div>
-              <p className="text-sm">
-                Isso irá atualizar o histórico de preços deste mercado para futuras comparações.
-              </p>
             </AlertDialogDescription>
           </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={saving}>Voltar</AlertDialogCancel>
-            <AlertDialogAction onClick={finishShopping} disabled={saving}>
+          <AlertDialogFooter className="flex-row gap-3 space-x-0 mt-4">
+            <AlertDialogCancel disabled={saving} className="flex-1 h-12 rounded-xl mt-0">Voltar</AlertDialogCancel>
+            <AlertDialogAction onClick={finishShopping} disabled={saving} className="flex-1 h-12 rounded-xl">
               {saving ? (
                 <Loader2 className="w-4 h-4 animate-spin" />
               ) : (
-                "Confirmar"
+                "Finalizar e Fechar"
               )}
             </AlertDialogAction>
           </AlertDialogFooter>

@@ -101,7 +101,6 @@ export default function PriceManager() {
       if (error) throw error;
       setExistingPrices(data || []);
 
-      // Populate prices state with existing prices
       const priceMap: Record<string, string> = {};
       (data || []).forEach((price) => {
         priceMap[price.product_id] = price.price.toString();
@@ -124,7 +123,6 @@ export default function PriceManager() {
 
     setSaving(true);
     try {
-      // Prepare upsert data
       const upsertData = Object.entries(prices)
         .filter(([_, price]) => price && parseFloat(price) > 0)
         .map(([productId, price]) => ({
@@ -137,12 +135,12 @@ export default function PriceManager() {
         toast({
           title: "Nenhum preço para salvar",
           description: "Informe pelo menos um preço válido",
+          variant: "default",
         });
         setSaving(false);
         return;
       }
 
-      // Upsert prices (update or insert)
       const { error } = await supabase
         .from("market_prices")
         .upsert(upsertData, {
@@ -151,10 +149,7 @@ export default function PriceManager() {
 
       if (error) throw error;
 
-      toast({
-        title: "Preços salvos!",
-        description: `${upsertData.length} preços foram atualizados`,
-      });
+      // Toast removido
 
       fetchMarketPrices();
     } catch (error) {
@@ -197,7 +192,6 @@ export default function PriceManager() {
       </header>
 
       <main className="px-4 py-4 max-w-md mx-auto">
-        {/* Market Selector */}
         <div className="mb-6">
           <p className="text-sm font-medium text-foreground mb-2">Selecione o mercado:</p>
           <Select value={selectedMarket} onValueChange={setSelectedMarket}>
@@ -224,7 +218,6 @@ export default function PriceManager() {
           </div>
         )}
 
-        {/* Product Prices */}
         {selectedMarket && (
           <>
             <div className="space-y-3 mb-6">
