@@ -106,7 +106,7 @@ export default function ListDetail() {
   const [selectedMarket, setSelectedMarket] = useState<Market | null>(null);
   const [itemPrices, setItemPrices] = useState<ItemPrice>({});
   const [saving, setSaving] = useState(false);
-  const [startingShopping, setStartingShopping] = useState(false); // Loading state for start button
+  const [startingShopping, setStartingShopping] = useState(false);
 
   // Duplication state
   const [newListName, setNewListName] = useState("");
@@ -130,9 +130,10 @@ export default function ListDetail() {
   }, [user, id]);
 
   useEffect(() => {
-    // Only load from URL if NOT already shopping and NOT closed
+    // REGRA DE NEGÓCIO (Buscar Lista/Pago):
+    // Se vier com usePrices=true (do Comparador), CARREGA os preços (shouldFetchPrices = true)
     if (preselectedMarketId && usePrices && list && list.status === 'open') {
-      loadMarketWithPrices(preselectedMarketId, true);
+      loadMarketData(preselectedMarketId, true, true);
     }
   }, [preselectedMarketId, usePrices, list]);
 
@@ -166,14 +167,13 @@ export default function ListDetail() {
       if (itemsError) throw itemsError;
       setItems(itemsData as ListItem[]);
 
-      // LÓGICA DE ESTADO PERSISTENTE:
-      // Se status for 'closed', carrega mercado para leitura.
-      // Se status for 'shopping', carrega mercado e ATIVA modo compras.
       if (listData.market_id) {
         if (listData.status === 'closed') {
-          await loadMarketWithPrices(listData.market_id, false);
+          // Lista fechada: Carrega preços (histórico) -> shouldFetchPrices = true
+          await loadMarketData(listData.market_id, false, true);
         } else if (listData.status === 'shopping') {
-          await loadMarketWithPrices(listData.market_id, true); // true = ativa isShoppingMode
+          // Lista em andamento: NÃO carrega preços (zerado para editar) -> shouldFetchPrices = false
+          await loadMarketData(listData.market_id, true, false);
         }
       }
 
@@ -201,8 +201,19 @@ export default function ListDetail() {
     }
   };
 
-  const loadMarketWithPrices = async (marketId: string, enableShoppingMode: boolean = false) => {
+  /**
+   * Função Centralizada para carregar Mercado e (opcionalmente) Preços
+   * @param marketId ID do mercado
+   * @param enableShoppingMode Ativa o modo visual de compras
+   * @param shouldFetchPrices Se TRUE, busca preços no banco. Se FALSE, inicia zerado.
+   */
+  const loadMarketData = async (
+    marketId: string,
+    enableShoppingMode: boolean = false,
+    shouldFetchPrices: boolean = false
+  ) => {
     try {
+      // 1. Carrega Mercado
       const { data: marketData, error: marketError } = await supabase
         .from("markets")
         .select("*")
@@ -212,35 +223,41 @@ export default function ListDetail() {
       if (marketError) throw marketError;
       setSelectedMarket(marketData);
 
-      const { data: listItems } = await supabase
-        .from("list_items")
-        .select("id, product_id")
-        .eq("list_id", id);
+      // 2. Carrega Preços (SOMENTE SE SOLICITADO)
+      if (shouldFetchPrices) {
+        const { data: listItems } = await supabase
+          .from("list_items")
+          .select("id, product_id")
+          .eq("list_id", id);
 
-      if (listItems && listItems.length > 0) {
-        const productIds = listItems.map((i: any) => i.product_id);
+        if (listItems && listItems.length > 0) {
+          const productIds = listItems.map((i: any) => i.product_id);
 
-        const { data: pricesData } = await supabase
-          .from("market_prices")
-          .select("product_id, price")
-          .eq("market_id", marketId)
-          .in("product_id", productIds);
+          const { data: pricesData } = await supabase
+            .from("market_prices")
+            .select("product_id, price")
+            .eq("market_id", marketId)
+            .in("product_id", productIds);
 
-        if (pricesData) {
-          const productToItem: { [productId: string]: string } = {};
-          listItems.forEach((item: any) => {
-            productToItem[item.product_id] = item.id;
-          });
+          if (pricesData) {
+            const productToItem: { [productId: string]: string } = {};
+            listItems.forEach((item: any) => {
+              productToItem[item.product_id] = item.id;
+            });
 
-          const prices: ItemPrice = {};
-          pricesData.forEach((price: any) => {
-            const itemId = productToItem[price.product_id];
-            if (itemId) {
-              prices[itemId] = price.price;
-            }
-          });
-          setItemPrices(prices);
+            const prices: ItemPrice = {};
+            pricesData.forEach((price: any) => {
+              const itemId = productToItem[price.product_id];
+              if (itemId) {
+                prices[itemId] = price.price;
+              }
+            });
+            setItemPrices(prices);
+          }
         }
+      } else {
+        // Se não deve buscar preços, garante que esteja limpo
+        setItemPrices({});
       }
 
       if (enableShoppingMode) {
@@ -248,9 +265,9 @@ export default function ListDetail() {
       }
 
     } catch (error) {
-      console.error("Error loading market prices:", error);
+      console.error("Error loading market data:", error);
       toast({
-        title: "Erro ao carregar preços",
+        title: "Erro ao carregar dados",
         description: "Tente novamente mais tarde",
         variant: "destructive",
       });
@@ -307,7 +324,6 @@ export default function ListDetail() {
     }
   };
 
-  // --- Função RESTAURADA ---
   const toggleProductSelection = (productId: string) => {
     const existingItem = items.find((item) => item.product_id === productId);
     if (existingItem) return;
@@ -322,7 +338,6 @@ export default function ListDetail() {
       return newSet;
     });
   };
-  // --------------------------
 
   const addSelectedProducts = async () => {
     if (!id || selectedProducts.size === 0) return;
@@ -460,7 +475,6 @@ export default function ListDetail() {
 
     setStartingShopping(true);
     try {
-      // 1. Persistir o estado 'shopping' e o mercado no banco
       const { error } = await supabase
         .from("shopping_lists")
         .update({
@@ -471,12 +485,12 @@ export default function ListDetail() {
 
       if (error) throw error;
 
-      // 2. Atualizar estado local
       setList(prev => prev ? { ...prev, status: 'shopping', market_id: selectedMarket.id } : null);
-      setIsShoppingMode(true);
-      loadMarketWithPrices(selectedMarket.id, true);
 
-      // Opcional: Marcar itens já checados, se houver lógica para isso
+      // REGRA DE NEGÓCIO: Iniciar compras = Preços Zerados (shouldFetchPrices = false)
+      setIsShoppingMode(true);
+      loadMarketData(selectedMarket.id, true, false);
+
       items.forEach((item) => {
         if (item.is_checked) {
           toggleCheck(item.id);
@@ -497,14 +511,11 @@ export default function ListDetail() {
   const cancelShopping = async () => {
     if (!id) return;
 
-    // Ao cancelar, voltamos para 'open', mas podemos decidir se limpamos o market_id ou não.
-    // Geralmente limpar é melhor para resetar o fluxo.
     try {
       const { error } = await supabase
         .from("shopping_lists")
         .update({
           status: 'open',
-          // market_id: null // Opcional: comentar se quiser manter o último mercado selecionado
         })
         .eq("id", id);
 
@@ -514,7 +525,6 @@ export default function ListDetail() {
       setIsShoppingMode(false);
     } catch (error) {
       console.error("Error cancelling shopping:", error);
-      // Fallback local se der erro no banco, para não travar o usuário
       setIsShoppingMode(false);
     }
   };
@@ -854,7 +864,7 @@ export default function ListDetail() {
         </div>
       )}
 
-      {/* Edit List Name Dialog */}
+      {/* Dialogs */}
       <Dialog open={editNameDialogOpen} onOpenChange={setEditNameDialogOpen}>
         <DialogContent className="w-[90%] max-w-sm mx-auto rounded-2xl p-6">
           <DialogHeader>
@@ -873,17 +883,12 @@ export default function ListDetail() {
               className="w-full h-12 rounded-xl text-base font-medium"
               disabled={!editingName.trim() || isUpdating}
             >
-              {isUpdating ? (
-                <Loader2 className="w-5 h-5 animate-spin" />
-              ) : (
-                "Salvar"
-              )}
+              {isUpdating ? <Loader2 className="w-5 h-5 animate-spin" /> : "Salvar"}
             </Button>
           </div>
         </DialogContent>
       </Dialog>
 
-      {/* Delete List Confirmation */}
       <AlertDialog open={deleteListDialogOpen} onOpenChange={setDeleteListDialogOpen}>
         <AlertDialogContent className="w-[90%] max-w-sm mx-auto rounded-2xl p-6">
           <AlertDialogHeader>
@@ -893,25 +898,18 @@ export default function ListDetail() {
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter className="flex-row gap-3 space-x-0 mt-4">
-            <AlertDialogCancel disabled={isDeleting} className="flex-1 h-12 rounded-xl mt-0">
-              Cancelar
-            </AlertDialogCancel>
+            <AlertDialogCancel disabled={isDeleting} className="flex-1 h-12 rounded-xl mt-0">Cancelar</AlertDialogCancel>
             <AlertDialogAction
               onClick={deleteList}
               disabled={isDeleting}
               className="flex-1 h-12 rounded-xl bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
-              {isDeleting ? (
-                <Loader2 className="w-4 h-4 animate-spin" />
-              ) : (
-                "Excluir"
-              )}
+              {isDeleting ? <Loader2 className="w-4 h-4 animate-spin" /> : "Excluir"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
 
-      {/* Duplicate List Dialog */}
       <Dialog open={duplicateDialogOpen} onOpenChange={setDuplicateDialogOpen}>
         <DialogContent className="w-[90%] max-w-sm mx-auto rounded-2xl p-6">
           <DialogHeader>
@@ -933,20 +931,12 @@ export default function ListDetail() {
               className="w-full h-12 rounded-xl text-base font-medium"
               disabled={!newListName.trim() || duplicating}
             >
-              {duplicating ? (
-                <Loader2 className="w-5 h-5 animate-spin" />
-              ) : (
-                <>
-                  <Copy className="w-4 h-4 mr-2" />
-                  Criar e Abrir
-                </>
-              )}
+              {duplicating ? <Loader2 className="w-5 h-5 animate-spin" /> : <> <Copy className="w-4 h-4 mr-2" /> Criar e Abrir </>}
             </Button>
           </div>
         </DialogContent>
       </Dialog>
 
-      {/* Add Product Dialog */}
       <Dialog open={addDialogOpen} onOpenChange={closeAddDialog}>
         <DialogContent className="w-[95%] max-w-sm mx-auto rounded-2xl h-[85vh] p-0 gap-0 overflow-hidden flex flex-col">
           <DialogHeader className="p-4 pb-2 border-b border-border/50 bg-background z-10">
@@ -959,7 +949,6 @@ export default function ListDetail() {
               )}
             </DialogTitle>
           </DialogHeader>
-
           <div className="p-4 pb-2 bg-background z-10">
             <div className="relative">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground" />
@@ -982,12 +971,10 @@ export default function ListDetail() {
               )}
             </div>
           </div>
-
           <div className="flex-1 overflow-y-auto px-4 py-2 space-y-2">
             {filteredProducts.map((product) => {
               const isInList = items.some((item) => item.product_id === product.id);
               const isSelected = selectedProducts.has(product.id);
-
               return (
                 <button
                   key={product.id}
@@ -1031,28 +1018,19 @@ export default function ListDetail() {
                 </button>
               );
             })}
-
             {filteredProducts.length === 0 && (
               <div className="py-8 text-center text-muted-foreground">
                 <p>Nenhum produto encontrado</p>
               </div>
             )}
           </div>
-
           <div className="p-4 border-t border-border bg-background z-10">
             <Button
               onClick={addSelectedProducts}
               className="w-full h-14 rounded-xl text-lg font-medium shadow-md"
               disabled={selectedProducts.size === 0 || addingProducts}
             >
-              {addingProducts ? (
-                <Loader2 className="w-6 h-6 animate-spin" />
-              ) : (
-                <>
-                  <Plus className="w-5 h-5 mr-2" />
-                  Adicionar {selectedProducts.size > 0 ? `${selectedProducts.size} produtos` : "Produtos"}
-                </>
-              )}
+              {addingProducts ? <Loader2 className="w-6 h-6 animate-spin" /> : <> <Plus className="w-5 h-5 mr-2" /> Adicionar {selectedProducts.size > 0 ? `${selectedProducts.size} produtos` : "Produtos"} </>}
             </Button>
           </div>
         </DialogContent>
@@ -1063,27 +1041,17 @@ export default function ListDetail() {
           <AlertDialogHeader>
             <AlertDialogTitle className="font-display text-xl">Finalizar Compras?</AlertDialogTitle>
             <AlertDialogDescription className="space-y-3">
-              <p>
-                Os preços informados serão salvos e a lista será <strong>fechada</strong>.
-              </p>
+              <p>Os preços informados serão salvos e a lista será <strong>fechada</strong>.</p>
               <div className="bg-muted/50 p-4 rounded-xl border border-border/50">
-                <p className="text-2xl font-bold text-foreground text-center">
-                  R$ {totalPrice.toFixed(2)}
-                </p>
-                <p className="text-sm text-muted-foreground text-center mt-1">
-                  {Object.keys(itemPrices).filter((k) => itemPrices[k] > 0).length} produtos com preço
-                </p>
+                <p className="text-2xl font-bold text-foreground text-center">R$ {totalPrice.toFixed(2)}</p>
+                <p className="text-sm text-muted-foreground text-center mt-1">{Object.keys(itemPrices).filter((k) => itemPrices[k] > 0).length} produtos com preço</p>
               </div>
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter className="flex-row gap-3 space-x-0 mt-4">
             <AlertDialogCancel disabled={saving} className="flex-1 h-12 rounded-xl mt-0">Voltar</AlertDialogCancel>
             <AlertDialogAction onClick={finishShopping} disabled={saving} className="flex-1 h-12 rounded-xl">
-              {saving ? (
-                <Loader2 className="w-4 h-4 animate-spin" />
-              ) : (
-                "Finalizar e Fechar"
-              )}
+              {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : "Finalizar e Fechar"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
