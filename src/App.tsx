@@ -6,36 +6,36 @@ import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { AuthProvider } from "@/hooks/useAuth";
 import Index from "./pages/Index";
 import Auth from "./pages/Auth";
+import NotFound from "./pages/NotFound";
 import ListDetail from "./pages/ListDetail";
+import Compare from "./pages/Compare";
 import Markets from "./pages/Markets";
 import Profile from "./pages/Profile";
-import Compare from "./pages/Compare";
-import MarketDetail from "./pages/MarketDetail";
 import PriceManager from "./pages/PriceManager";
-import NotFound from "./pages/NotFound";
+import CreateMarket from "./pages/CreateMarket"; // Importe a nova página
 
 const queryClient = new QueryClient();
 
 const App = () => (
   <QueryClientProvider client={queryClient}>
     <TooltipProvider>
-      <AuthProvider>
-        <Toaster />
-        <Sonner />
-        <BrowserRouter>
+      <Toaster />
+      <Sonner />
+      <BrowserRouter>
+        <AuthProvider>
           <Routes>
             <Route path="/" element={<Index />} />
             <Route path="/auth" element={<Auth />} />
             <Route path="/lista/:id" element={<ListDetail />} />
-            <Route path="/mercados" element={<Markets />} />
-            <Route path="/perfil" element={<Profile />} />
             <Route path="/comparar/:id" element={<Compare />} />
-            <Route path="/mercado/:marketId/:listId" element={<MarketDetail />} />
+            <Route path="/mercados" element={<Markets />} />
+            <Route path="/mercados/novo" element={<CreateMarket />} /> {/* Nova Rota */}
+            <Route path="/perfil" element={<Profile />} />
             <Route path="/precos" element={<PriceManager />} />
             <Route path="*" element={<NotFound />} />
           </Routes>
-        </BrowserRouter>
-      </AuthProvider>
+        </AuthProvider>
+      </BrowserRouter>
     </TooltipProvider>
   </QueryClientProvider>
 );

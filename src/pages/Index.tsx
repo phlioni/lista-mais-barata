@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { Plus, ShoppingBag, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { PageHeader } from "@/components/PageHeader";
-import { BottomNav } from "@/components/BottomNav";
+import { AppMenu } from "@/components/AppMenu"; // Novo menu
 import { ListCard } from "@/components/ListCard";
 import { EmptyState } from "@/components/EmptyState";
 import { useAuth } from "@/hooks/useAuth";
@@ -61,7 +61,6 @@ export default function Index() {
 
       if (listsError) throw listsError;
 
-      // Fetch item counts for each list
       const listsWithCounts = await Promise.all(
         (listsData || []).map(async (list) => {
           const { count } = await supabase
@@ -134,14 +133,18 @@ export default function Index() {
   }
 
   return (
-    <div className="min-h-screen bg-background pb-32">
-      <PageHeader
-        title="Minhas Listas"
-        subtitle="Gerencie suas compras"
-        action={
+    <div className="min-h-screen bg-background pb-8">
+      {/* Header Atualizado com Menu Lateral */}
+      <div className="flex items-center justify-between px-4 py-4 max-w-md mx-auto sticky top-0 z-30 bg-background/90 backdrop-blur-md border-b border-border">
+        <div>
+          <h1 className="text-2xl font-display font-bold text-foreground">Minhas Listas</h1>
+          <p className="text-sm text-muted-foreground">Gerencie suas compras</p>
+        </div>
+
+        <div className="flex items-center gap-2">
           <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
             <DialogTrigger asChild>
-              <Button size="icon" variant="ghost" className="text-primary h-10 w-10">
+              <Button size="icon" variant="secondary" className="text-primary h-10 w-10 rounded-xl">
                 <Plus className="w-6 h-6" />
               </Button>
             </DialogTrigger>
@@ -175,8 +178,10 @@ export default function Index() {
               </div>
             </DialogContent>
           </Dialog>
-        }
-      />
+
+          <AppMenu />
+        </div>
+      </div>
 
       <main className="px-4 py-4 max-w-md mx-auto">
         {loading ? (
@@ -203,7 +208,7 @@ export default function Index() {
                   id={list.id}
                   name={list.name}
                   itemCount={list.item_count}
-                  status={list.status} // Passando direto a string do banco
+                  status={list.status}
                   createdAt={list.created_at}
                 />
               </div>
@@ -211,8 +216,6 @@ export default function Index() {
           </div>
         )}
       </main>
-
-      <BottomNav />
     </div>
   );
 }

@@ -1,28 +1,48 @@
-import { LogOut, User, DollarSign, Settings, Loader2 } from "lucide-react";
+import { useEffect, useState } from "react";
+import { User, LogOut, Settings, DollarSign, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { PageHeader } from "@/components/PageHeader";
-import { BottomNav } from "@/components/BottomNav";
+import { AppMenu } from "@/components/AppMenu"; // Menu Lateral
 import { useAuth } from "@/hooks/useAuth";
-import { useNavigate, Link } from "react-router-dom";
-import { useEffect } from "react";
+import { useNavigate } from "react-router-dom";
+import { supabase } from "@/integrations/supabase/client";
 import { cn } from "@/lib/utils";
 
 export default function Profile() {
-  const { user, loading, signOut } = useAuth();
+  const { user, signOut, loading: authLoading } = useAuth();
   const navigate = useNavigate();
+  const [stats, setStats] = useState({
+    listsCount: 0,
+    marketsCount: 0,
+  });
 
   useEffect(() => {
-    if (!loading && !user) {
+    if (!authLoading && !user) {
       navigate("/auth");
     }
-  }, [user, loading, navigate]);
+  }, [user, authLoading, navigate]);
 
-  const handleSignOut = async () => {
-    await signOut();
-    navigate("/auth");
+  useEffect(() => {
+    if (user) {
+      fetchStats();
+    }
+  }, [user]);
+
+  const fetchStats = async () => {
+    if (!user) return;
+
+    const [listsRes, marketsRes] = await Promise.all([
+      supabase.from("shopping_lists").select("*", { count: "exact", head: true }).eq("user_id", user.id),
+      supabase.from("markets").select("*", { count: "exact", head: true }),
+    ]);
+
+    setStats({
+      listsCount: listsRes.count || 0,
+      marketsCount: marketsRes.count || 0,
+    });
   };
 
-  if (loading) {
+  if (authLoading || !user) {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
         <Loader2 className="w-8 h-8 animate-spin text-primary" />
@@ -30,59 +50,74 @@ export default function Profile() {
     );
   }
 
-  if (!user) {
-    return null;
-  }
-
   return (
-    <div className="min-h-screen bg-background pb-24">
-      <PageHeader title="Perfil" />
+    <div className="min-h-screen bg-background pb-8">
+      {/* Header Atualizado */}
+      <div className="flex items-center justify-between px-4 py-4 max-w-md mx-auto sticky top-0 z-30 bg-background/90 backdrop-blur-md border-b border-border">
+        <div>
+          <h1 className="text-2xl font-display font-bold text-foreground">Perfil</h1>
+          <p className="text-sm text-muted-foreground">Minha conta</p>
+        </div>
+        <AppMenu />
+      </div>
 
-      <main className="px-4 py-4 max-w-md mx-auto">
-        {/* User Info */}
-        <div className="bg-card rounded-2xl border border-border shadow-soft p-6 mb-6 animate-slide-up">
-          <div className="flex items-center gap-4">
-            <div className="w-16 h-16 rounded-2xl bg-accent flex items-center justify-center">
-              <User className="w-8 h-8 text-primary" />
-            </div>
-            <div className="flex-1 min-w-0">
-              <h2 className="font-display font-semibold text-lg text-foreground">Usuário</h2>
-              <p className="text-sm text-muted-foreground truncate">{user.email}</p>
-            </div>
+      <main className="px-4 py-6 max-w-md mx-auto space-y-6">
+        {/* User Info Card */}
+        <div className="bg-card border border-border rounded-2xl p-6 shadow-soft text-center animate-slide-up">
+          <div className="w-20 h-20 bg-primary/10 rounded-full flex items-center justify-center mx-auto mb-4">
+            <User className="w-10 h-10 text-primary" />
+          </div>
+          <h2 className="text-lg font-bold font-display">{user.email?.split("@")[0]}</h2>
+          <p className="text-sm text-muted-foreground">{user.email}</p>
+        </div>
+
+        {/* Stats Grid */}
+        <div className="grid grid-cols-2 gap-4">
+          <div className="bg-card border border-border rounded-2xl p-4 shadow-sm flex flex-col items-center justify-center gap-2 animate-slide-up" style={{ animationDelay: "50ms" }}>
+            <span className="text-3xl font-bold font-display text-primary">{stats.listsCount}</span>
+            <span className="text-xs text-muted-foreground uppercase tracking-wider font-medium">Listas Criadas</span>
+          </div>
+          <div className="bg-card border border-border rounded-2xl p-4 shadow-sm flex flex-col items-center justify-center gap-2 animate-slide-up" style={{ animationDelay: "100ms" }}>
+            <span className="text-3xl font-bold font-display text-primary">{stats.marketsCount}</span>
+            <span className="text-xs text-muted-foreground uppercase tracking-wider font-medium">Mercados</span>
           </div>
         </div>
 
-        {/* Menu Options */}
-        <div className="space-y-2 mb-6">
-          <Link
-            to="/precos"
-            className={cn(
-              "flex items-center gap-4 p-4 bg-card rounded-2xl border border-border",
-              "transition-all duration-200 hover:shadow-soft hover:border-primary/20"
-            )}
+        {/* Menu Actions */}
+        <div className="space-y-3 animate-slide-up" style={{ animationDelay: "150ms" }}>
+          <Button
+            variant="outline"
+            className="w-full h-14 justify-start px-4 rounded-xl border-border bg-card hover:bg-secondary/50"
+            onClick={() => navigate("/precos")}
           >
-            <div className="w-10 h-10 rounded-xl bg-accent flex items-center justify-center">
-              <DollarSign className="w-5 h-5 text-primary" />
+            <div className="w-8 h-8 rounded-lg bg-green-500/10 flex items-center justify-center mr-3">
+              <DollarSign className="w-4 h-4 text-green-600" />
             </div>
-            <div className="flex-1">
-              <h3 className="font-medium text-foreground">Gerenciar Preços</h3>
-              <p className="text-sm text-muted-foreground">Adicionar preços aos mercados</p>
+            Gerenciar Preços
+          </Button>
+
+          <Button
+            variant="outline"
+            className="w-full h-14 justify-start px-4 rounded-xl border-border bg-card hover:bg-secondary/50"
+          >
+            <div className="w-8 h-8 rounded-lg bg-blue-500/10 flex items-center justify-center mr-3">
+              <Settings className="w-4 h-4 text-blue-600" />
             </div>
-          </Link>
+            Configurações
+          </Button>
+
+          <Button
+            variant="outline"
+            className="w-full h-14 justify-start px-4 rounded-xl border-border bg-card hover:bg-destructive/5 text-destructive hover:text-destructive hover:border-destructive/30"
+            onClick={() => signOut()}
+          >
+            <div className="w-8 h-8 rounded-lg bg-destructive/10 flex items-center justify-center mr-3">
+              <LogOut className="w-4 h-4 text-destructive" />
+            </div>
+            Sair da conta
+          </Button>
         </div>
-
-        {/* Sign Out */}
-        <Button
-          onClick={handleSignOut}
-          variant="outline"
-          className="w-full h-12 text-destructive hover:text-destructive hover:bg-destructive/10"
-        >
-          <LogOut className="w-5 h-5" />
-          Sair da Conta
-        </Button>
       </main>
-
-      <BottomNav />
     </div>
   );
 }

@@ -1,23 +1,12 @@
 import { useState, useEffect } from "react";
 import { Plus, MapPin, Store, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { PageHeader } from "@/components/PageHeader";
-import { BottomNav } from "@/components/BottomNav";
-import { MapPlaceholder } from "@/components/MapPlaceholder";
+import { AppMenu } from "@/components/AppMenu";
 import { EmptyState } from "@/components/EmptyState";
 import { useAuth } from "@/hooks/useAuth";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
-import { getAddressFromCoordinates } from "@/lib/geocoding";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 
 interface Market {
@@ -34,12 +23,6 @@ export default function Markets() {
   const { toast } = useToast();
   const [markets, setMarkets] = useState<Market[]>([]);
   const [loading, setLoading] = useState(true);
-  const [dialogOpen, setDialogOpen] = useState(false);
-  const [creating, setCreating] = useState(false);
-  const [newMarketName, setNewMarketName] = useState("");
-  const [selectedLocation, setSelectedLocation] = useState<{ lat: number; lng: number } | null>(null);
-  const [fetchedAddress, setFetchedAddress] = useState<string | null>(null);
-  const [fetchingAddress, setFetchingAddress] = useState(false);
 
   useEffect(() => {
     if (!authLoading && !user) {
@@ -52,21 +35,6 @@ export default function Markets() {
       fetchMarkets();
     }
   }, [user]);
-
-  useEffect(() => {
-    if (selectedLocation) {
-      setFetchingAddress(true);
-      getAddressFromCoordinates(selectedLocation.lat, selectedLocation.lng)
-        .then((address) => {
-          setFetchedAddress(address);
-        })
-        .finally(() => {
-          setFetchingAddress(false);
-        });
-    } else {
-      setFetchedAddress(null);
-    }
-  }, [selectedLocation]);
 
   const fetchMarkets = async () => {
     setLoading(true);
@@ -90,50 +58,6 @@ export default function Markets() {
     }
   };
 
-  const createMarket = async () => {
-    if (!newMarketName.trim() || !selectedLocation) {
-      toast({
-        title: "Dados incompletos",
-        description: "Informe o nome e selecione a localização no mapa",
-        variant: "destructive",
-      });
-      return;
-    }
-
-    setCreating(true);
-    try {
-      const { data, error } = await supabase
-        .from("markets")
-        .insert({
-          name: newMarketName.trim(),
-          latitude: selectedLocation.lat,
-          longitude: selectedLocation.lng,
-          address: fetchedAddress,
-        })
-        .select()
-        .single();
-
-      if (error) throw error;
-
-      // Toast removido
-
-      setNewMarketName("");
-      setSelectedLocation(null);
-      setFetchedAddress(null);
-      setDialogOpen(false);
-      fetchMarkets();
-    } catch (error) {
-      console.error("Error creating market:", error);
-      toast({
-        title: "Erro",
-        description: "Não foi possível cadastrar o mercado",
-        variant: "destructive",
-      });
-    } finally {
-      setCreating(false);
-    }
-  };
-
   if (authLoading) {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
@@ -147,78 +71,27 @@ export default function Markets() {
   }
 
   return (
-    <div className="min-h-screen bg-background pb-24">
-      <PageHeader
-        title="Mercados"
-        subtitle="Locais cadastrados"
-        action={
-          <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-            <DialogTrigger asChild>
-              <Button size="icon" variant="ghost" className="text-primary">
-                <Plus className="w-6 h-6" />
-              </Button>
-            </DialogTrigger>
-            <DialogContent className="max-w-sm mx-4 rounded-2xl">
-              <DialogHeader>
-                <DialogTitle className="font-display">Cadastrar Mercado</DialogTitle>
-              </DialogHeader>
-              <div className="space-y-4 mt-4">
-                <Input
-                  placeholder="Nome do Mercado"
-                  value={newMarketName}
-                  onChange={(e) => setNewMarketName(e.target.value)}
-                  className="h-12 rounded-xl"
-                />
+    <div className="min-h-screen bg-background pb-8">
+      <div className="flex items-center justify-between px-4 py-4 max-w-md mx-auto sticky top-0 z-30 bg-background/90 backdrop-blur-md border-b border-border">
+        <div>
+          <h1 className="text-2xl font-display font-bold text-foreground">Mercados</h1>
+          <p className="text-sm text-muted-foreground">Locais cadastrados</p>
+        </div>
 
-                <div>
-                  <p className="text-sm text-muted-foreground mb-2">
-                    Selecione a localização:
-                  </p>
-                  <MapPlaceholder
-                    onLocationSelect={(lat, lng) => setSelectedLocation({ lat, lng })}
-                    selectedLocation={selectedLocation}
-                  />
-                </div>
+        <div className="flex items-center gap-2">
+          {/* Agora navega para a página dedicada ao invés de abrir Dialog */}
+          <Button
+            size="icon"
+            variant="secondary"
+            className="text-primary h-10 w-10 rounded-xl"
+            onClick={() => navigate("/mercados/novo")}
+          >
+            <Plus className="w-6 h-6" />
+          </Button>
 
-                {selectedLocation && (
-                  <div className="text-center">
-                    {fetchingAddress ? (
-                      <p className="text-xs text-muted-foreground flex items-center justify-center gap-1">
-                        <Loader2 className="w-3 h-3 animate-spin" />
-                        Buscando endereço...
-                      </p>
-                    ) : fetchedAddress ? (
-                      <p className="text-xs text-muted-foreground flex items-center justify-center gap-1">
-                        <MapPin className="w-3 h-3 flex-shrink-0" />
-                        <span className="truncate">{fetchedAddress}</span>
-                      </p>
-                    ) : (
-                      <p className="text-xs text-muted-foreground">
-                        📍 {selectedLocation.lat.toFixed(4)}, {selectedLocation.lng.toFixed(4)}
-                      </p>
-                    )}
-                  </div>
-                )}
-
-                <Button
-                  onClick={createMarket}
-                  className="w-full h-12"
-                  disabled={!newMarketName.trim() || !selectedLocation || creating}
-                >
-                  {creating ? (
-                    <Loader2 className="w-5 h-5 animate-spin" />
-                  ) : (
-                    <>
-                      <Plus className="w-5 h-5" />
-                      Cadastrar Mercado
-                    </>
-                  )}
-                </Button>
-              </div>
-            </DialogContent>
-          </Dialog>
-        }
-      />
+          <AppMenu />
+        </div>
+      </div>
 
       <main className="px-4 py-4 max-w-md mx-auto">
         {loading ? (
@@ -231,8 +104,8 @@ export default function Markets() {
             title="Nenhum mercado cadastrado"
             description="Adicione mercados para começar a comparar preços"
             action={
-              <Button onClick={() => setDialogOpen(true)}>
-                <Plus className="w-5 h-5" />
+              <Button onClick={() => navigate("/mercados/novo")} className="h-12 rounded-xl">
+                <Plus className="w-5 h-5 mr-2" />
                 Cadastrar Mercado
               </Button>
             }
@@ -248,14 +121,14 @@ export default function Markets() {
                 )}
                 style={{ animationDelay: `${index * 50}ms` }}
               >
-                <div className="flex items-center justify-center w-12 h-12 rounded-xl bg-accent">
+                <div className="flex items-center justify-center w-12 h-12 rounded-xl bg-primary/10 flex-shrink-0">
                   <Store className="w-6 h-6 text-primary" />
                 </div>
                 <div className="flex-1 min-w-0">
-                  <h3 className="font-semibold text-foreground">{market.name}</h3>
-                  <p className="text-sm text-muted-foreground flex items-center gap-1 truncate">
-                    <MapPin className="w-3 h-3 flex-shrink-0" />
-                    {market.address || `${market.latitude.toFixed(4)}, ${market.longitude.toFixed(4)}`}
+                  <h3 className="font-semibold text-foreground truncate">{market.name}</h3>
+                  <p className="text-sm text-muted-foreground flex items-center gap-1.5 truncate mt-0.5">
+                    <MapPin className="w-3.5 h-3.5 flex-shrink-0" />
+                    {market.address || `${market.latitude.toFixed(5)}, ${market.longitude.toFixed(5)}`}
                   </p>
                 </div>
               </div>
@@ -263,8 +136,6 @@ export default function Markets() {
           </div>
         )}
       </main>
-
-      <BottomNav />
     </div>
   );
 }

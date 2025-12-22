@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { ArrowLeft, Store, Loader2, Save, DollarSign } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { BottomNav } from "@/components/BottomNav";
+import { AppMenu } from "@/components/AppMenu"; // Menu Lateral
 import { useAuth } from "@/hooks/useAuth";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
@@ -149,8 +149,6 @@ export default function PriceManager() {
 
       if (error) throw error;
 
-      // Toast removido
-
       fetchMarketPrices();
     } catch (error) {
       console.error("Error saving prices:", error);
@@ -173,21 +171,24 @@ export default function PriceManager() {
   }
 
   return (
-    <div className="min-h-screen bg-background pb-24">
-      {/* Header */}
+    <div className="min-h-screen bg-background pb-8">
+      {/* Header Atualizado */}
       <header className="sticky top-0 z-40 bg-background/80 backdrop-blur-lg border-b border-border">
-        <div className="flex items-center gap-3 px-4 py-4 max-w-md mx-auto">
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => navigate("/perfil")}
-          >
-            <ArrowLeft className="w-5 h-5" />
-          </Button>
-          <div className="flex-1">
-            <h1 className="text-lg font-display font-bold text-foreground">Gerenciar Preços</h1>
-            <p className="text-sm text-muted-foreground">Adicionar preços aos mercados</p>
+        <div className="flex items-center justify-between px-4 py-4 max-w-md mx-auto">
+          <div className="flex items-center gap-3">
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => navigate("/perfil")}
+            >
+              <ArrowLeft className="w-5 h-5" />
+            </Button>
+            <div>
+              <h1 className="text-lg font-display font-bold text-foreground">Gerenciar Preços</h1>
+              <p className="text-sm text-muted-foreground">Adicionar preços aos mercados</p>
+            </div>
           </div>
+          <AppMenu />
         </div>
       </header>
 
@@ -271,8 +272,6 @@ export default function PriceManager() {
           </>
         )}
       </main>
-
-      <BottomNav />
     </div>
   );
 }

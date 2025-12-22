@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ProductItem } from "@/components/ProductItem";
 import { EmptyState } from "@/components/EmptyState";
-import { BottomNav } from "@/components/BottomNav";
+import { AppMenu } from "@/components/AppMenu"; // Menu Lateral
 import { MarketSelector } from "@/components/MarketSelector";
 import { useAuth } from "@/hooks/useAuth";
 import { supabase } from "@/integrations/supabase/client";
@@ -38,6 +38,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 
+// ... (Interfaces Product, ListItem, ShoppingList, Market, ItemPrice mantidas iguais)
 interface Product {
   id: string;
   name: string;
@@ -55,7 +56,7 @@ interface ListItem {
 interface ShoppingList {
   id: string;
   name: string;
-  status: string; // 'open', 'shopping', 'closed'
+  status: string;
   market_id?: string | null;
 }
 
@@ -130,8 +131,6 @@ export default function ListDetail() {
   }, [user, id]);
 
   useEffect(() => {
-    // REGRA DE NEGÓCIO (Buscar Lista/Pago):
-    // Se vier com usePrices=true (do Comparador), CARREGA os preços (shouldFetchPrices = true)
     if (preselectedMarketId && usePrices && list && list.status === 'open') {
       loadMarketData(preselectedMarketId, true, true);
     }
@@ -169,10 +168,8 @@ export default function ListDetail() {
 
       if (listData.market_id) {
         if (listData.status === 'closed') {
-          // Lista fechada: Carrega preços (histórico) -> shouldFetchPrices = true
           await loadMarketData(listData.market_id, false, true);
         } else if (listData.status === 'shopping') {
-          // Lista em andamento: NÃO carrega preços (zerado para editar) -> shouldFetchPrices = false
           await loadMarketData(listData.market_id, true, false);
         }
       }
@@ -201,19 +198,12 @@ export default function ListDetail() {
     }
   };
 
-  /**
-   * Função Centralizada para carregar Mercado e (opcionalmente) Preços
-   * @param marketId ID do mercado
-   * @param enableShoppingMode Ativa o modo visual de compras
-   * @param shouldFetchPrices Se TRUE, busca preços no banco. Se FALSE, inicia zerado.
-   */
   const loadMarketData = async (
     marketId: string,
     enableShoppingMode: boolean = false,
     shouldFetchPrices: boolean = false
   ) => {
     try {
-      // 1. Carrega Mercado
       const { data: marketData, error: marketError } = await supabase
         .from("markets")
         .select("*")
@@ -223,7 +213,6 @@ export default function ListDetail() {
       if (marketError) throw marketError;
       setSelectedMarket(marketData);
 
-      // 2. Carrega Preços (SOMENTE SE SOLICITADO)
       if (shouldFetchPrices) {
         const { data: listItems } = await supabase
           .from("list_items")
@@ -256,7 +245,6 @@ export default function ListDetail() {
           }
         }
       } else {
-        // Se não deve buscar preços, garante que esteja limpo
         setItemPrices({});
       }
 
@@ -487,7 +475,6 @@ export default function ListDetail() {
 
       setList(prev => prev ? { ...prev, status: 'shopping', market_id: selectedMarket.id } : null);
 
-      // REGRA DE NEGÓCIO: Iniciar compras = Preços Zerados (shouldFetchPrices = false)
       setIsShoppingMode(true);
       loadMarketData(selectedMarket.id, true, false);
 
@@ -674,8 +661,8 @@ export default function ListDetail() {
   }
 
   return (
-    <div className="min-h-screen bg-background pb-36 md:pb-32">
-      {/* Header */}
+    <div className="min-h-screen bg-background pb-8">
+      {/* Header Atualizado com Menu Lateral e Lógica de Status */}
       <header className="sticky top-0 z-40 bg-background/90 backdrop-blur-lg border-b border-border transition-all">
         <div className="flex items-center gap-2 px-4 py-4 max-w-md mx-auto">
           <Button
@@ -713,6 +700,7 @@ export default function ListDetail() {
               </Button>
             )}
 
+            {/* Menu Lateral integrado ao Dropdown de opções da lista */}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="ghost" size="icon" className="h-10 w-10">
@@ -734,6 +722,9 @@ export default function ListDetail() {
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
+
+            {/* Botão do Menu Principal do App */}
+            <AppMenu />
           </div>
         </div>
 
@@ -805,7 +796,7 @@ export default function ListDetail() {
 
       {/* Bottom Actions */}
       {items.length > 0 && (
-        <div className="fixed bottom-[4.5rem] md:bottom-20 left-0 right-0 p-4 bg-background/80 backdrop-blur-xl border-t border-border z-30">
+        <div className="fixed bottom-0 left-0 right-0 p-4 bg-background/80 backdrop-blur-xl border-t border-border z-30 safe-bottom">
           <div className="max-w-md mx-auto space-y-3">
             {isClosed ? (
               <Button
@@ -864,7 +855,7 @@ export default function ListDetail() {
         </div>
       )}
 
-      {/* Dialogs */}
+      {/* Dialogs ... (mesmos dialogs de antes) */}
       <Dialog open={editNameDialogOpen} onOpenChange={setEditNameDialogOpen}>
         <DialogContent className="w-[90%] max-w-sm mx-auto rounded-2xl p-6">
           <DialogHeader>
@@ -1056,8 +1047,6 @@ export default function ListDetail() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-
-      <BottomNav />
     </div>
   );
 }
