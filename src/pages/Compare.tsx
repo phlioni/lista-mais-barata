@@ -5,7 +5,8 @@ import { Button } from "@/components/ui/button";
 import { RadiusSelector } from "@/components/RadiusSelector";
 import { MarketCard } from "@/components/MarketCard";
 import { EmptyState } from "@/components/EmptyState";
-import { BottomNav } from "@/components/BottomNav";
+import { AppMenu } from "@/components/AppMenu"; // Alteração: Importando AppMenu
+// import { BottomNav } from "@/components/BottomNav"; // Removido
 import { useAuth } from "@/hooks/useAuth";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
@@ -52,7 +53,7 @@ function calculateDistance(lat1: number, lon1: number, lat2: number, lon2: numbe
   const R = 6371;
   const dLat = (lat2 - lat1) * Math.PI / 180;
   const dLon = (lon2 - lon1) * Math.PI / 180;
-  const a = 
+  const a =
     Math.sin(dLat / 2) * Math.sin(dLat / 2) +
     Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
     Math.sin(dLon / 2) * Math.sin(dLon / 2);
@@ -240,7 +241,7 @@ export default function Compare() {
         // First: prefer complete lists
         if (a.missingItems === 0 && b.missingItems > 0) return -1;
         if (b.missingItems === 0 && a.missingItems > 0) return 1;
-        
+
         // Second: if both have same completion status, sort by real cost
         return a.realCost - b.realCost;
       });
@@ -249,19 +250,19 @@ export default function Compare() {
       if (viableMarkets.length > 0) {
         // Find the best recommendation considering all factors
         let recommendedIndex = 0;
-        
+
         // If first has missing items but another one has all items with similar price, prefer complete
         const completeMarkets = viableMarkets.filter(m => m.missingItems === 0);
         if (completeMarkets.length > 0) {
           const bestComplete = completeMarkets[0];
           const priceDiff = viableMarkets[0].realCost - bestComplete.realCost;
-          
+
           // If complete market costs less than 20% more, recommend it
           if (priceDiff < 0 || (viableMarkets[0].missingItems > 0 && priceDiff / viableMarkets[0].realCost < 0.2)) {
             recommendedIndex = viableMarkets.findIndex(m => m.id === bestComplete.id);
           }
         }
-        
+
         viableMarkets[recommendedIndex].isRecommended = true;
       }
 
@@ -287,21 +288,25 @@ export default function Compare() {
   }
 
   return (
-    <div className="min-h-screen bg-background pb-24">
+    <div className="min-h-screen bg-background pb-8"> {/* Alteração: pb-24 -> pb-8 pois não tem mais BottomNav */}
       {/* Header */}
       <header className="sticky top-0 z-40 bg-background/80 backdrop-blur-lg border-b border-border">
-        <div className="flex items-center gap-3 px-4 py-4 max-w-md mx-auto">
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => navigate(`/lista/${id}`)}
-          >
-            <ArrowLeft className="w-5 h-5" />
-          </Button>
-          <div className="flex-1">
-            <h1 className="text-lg font-display font-bold text-foreground">Comparar Preços</h1>
-            <p className="text-sm text-muted-foreground">{listName}</p>
+        {/* Alteração: Justify-between para acomodar o menu */}
+        <div className="flex items-center justify-between px-4 py-4 max-w-md mx-auto">
+          <div className="flex items-center gap-3">
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => navigate(`/lista/${id}`)}
+            >
+              <ArrowLeft className="w-5 h-5" />
+            </Button>
+            <div>
+              <h1 className="text-lg font-display font-bold text-foreground">Comparar Preços</h1>
+              <p className="text-sm text-muted-foreground">{listName}</p>
+            </div>
           </div>
+          <AppMenu /> {/* Alteração: Menu Lateral Adicionado */}
         </div>
       </header>
 
@@ -310,7 +315,7 @@ export default function Compare() {
         <div className="flex items-center gap-2 text-sm text-muted-foreground mb-4">
           <MapPin className="w-4 h-4" />
           <span>
-            {userLocation 
+            {userLocation
               ? `Sua localização detectada`
               : "Obtendo localização..."}
           </span>
@@ -373,7 +378,7 @@ export default function Compare() {
         )}
       </main>
 
-      <BottomNav />
+      {/* <BottomNav /> Removido conforme solicitado */}
     </div>
   );
 }
