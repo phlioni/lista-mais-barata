@@ -1,5 +1,5 @@
 // Google Maps API Configuration
-export const GOOGLE_MAPS_API_KEY = "AIzaSyDLsJa1AMIflkpnz_17cBS1SHTjLK--82s";
+export const GOOGLE_MAPS_API_KEY = "AIzaSyCjrE0DA_MpxwPEsapcAcN5iMIwWUv2pTE";
 
 export const defaultMapCenter = {
   lat: -23.5505, // São Paulo
