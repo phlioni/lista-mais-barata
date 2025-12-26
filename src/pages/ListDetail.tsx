@@ -89,6 +89,8 @@ export default function ListDetail() {
   const { toast } = useToast();
 
   const preselectedMarketId = searchParams.get("marketId");
+
+  // Flag crucial: indica se devemos forçar o uso de preços (vindo do Comparar)
   const usePrices = searchParams.get("usePrices") === "true";
 
   const [list, setList] = useState<ShoppingList | null>(null);
@@ -135,7 +137,7 @@ export default function ListDetail() {
         await Promise.all([fetchListData(), fetchProducts()]);
 
         if (routeMarketId) {
-          // Modo "apenas visualização de preços"
+          // Modo "apenas visualização de preços" vindo do Comparar
           await loadMarketData(routeMarketId, false, true);
         }
 
@@ -150,13 +152,12 @@ export default function ListDetail() {
           'postgres_changes',
           { event: '*', schema: 'public', table: 'market_prices' },
           (payload) => {
-            // Determina o ID do mercado que está sendo visualizado no momento
             const currentMarketId = routeMarketId || list?.market_id || selectedMarket?.id;
 
-            // Se houver uma atualização de preço para o mercado que estou vendo
-            if (currentMarketId && payload.new && (payload.new as any).market_id === currentMarketId) {
+            // Só atualiza em tempo real se estivermos no MODO COMPARAÇÃO.
+            // Se for compra orgânica, ignoramos atualizações externas para não preencher a tela do usuário.
+            if (isCompareMode && currentMarketId && payload.new && (payload.new as any).market_id === currentMarketId) {
               console.log("Preço atualizado externamente. Recarregando...");
-              // Recarrega os preços sem alterar o modo da tela
               loadMarketData(currentMarketId, isShoppingMode, true);
             }
           }
@@ -206,13 +207,17 @@ export default function ListDetail() {
       if (itemsError) throw itemsError;
       setItems(itemsData as ListItem[]);
 
-      // Recupera estado de compras anterior se existir e não estivermos em modo comparação
+      // Lógica de recuperação de estado
       if (listData.market_id && !routeMarketId) {
         if (listData.status === 'closed') {
           await loadMarketData(listData.market_id, false, true);
         } else if (listData.status === 'shopping') {
-          // Importante: Passar TRUE no último parâmetro para recuperar os preços ao recarregar a página
-          await loadMarketData(listData.market_id, true, true);
+          // AQUI ESTÁ A CORREÇÃO PRINCIPAL:
+          // Carrega preços se:
+          // 1. isCompareMode = true (estamos vendo a comparação)
+          // 2. OR usePrices = true (acabamos de vir da comparação clicando em "Usar Lista")
+          const shouldLoadPrices = isCompareMode || usePrices;
+          await loadMarketData(listData.market_id, true, shouldLoadPrices);
         }
       }
 
@@ -287,6 +292,8 @@ export default function ListDetail() {
           }
         }
       } else {
+        // Se a instrução é NÃO buscar preços (false), limpamos o objeto
+        // Isso garante que compra orgânica comece zerada
         setItemPrices({});
       }
 
@@ -493,6 +500,9 @@ export default function ListDetail() {
     }
   };
 
+  // ------------------------------------------------------------------
+  // INICIAR COMPRAS (Ponto crítico da correção)
+  // ------------------------------------------------------------------
   const startShopping = async () => {
     if (!selectedMarket || !id) {
       toast({
@@ -519,8 +529,16 @@ export default function ListDetail() {
 
       setIsShoppingMode(true);
 
-      // Carrega dados e força o fetch de preços (último param = true)
-      loadMarketData(selectedMarket.id, true, true);
+      // Se veio do Comparar (isCompareMode = true), shouldLoadPrices = true.
+      // Se é Orgânico (isCompareMode = false), shouldLoadPrices = false.
+      const shouldLoadPrices = isCompareMode;
+
+      await loadMarketData(selectedMarket.id, true, shouldLoadPrices);
+
+      // Garante limpeza se for orgânico
+      if (!shouldLoadPrices) {
+        setItemPrices({});
+      }
 
       items.forEach((item) => {
         if (item.is_checked) {
@@ -529,8 +547,9 @@ export default function ListDetail() {
       });
 
       // Se estava no modo comparar, volta para a rota padrão da lista
+      // E passa a flag usePrices=true para o fetchListData saber que deve carregar os preços
       if (isCompareMode) {
-        navigate(`/lista/${id}`);
+        navigate(`/lista/${id}?usePrices=true`);
       }
 
     } catch (error) {
@@ -714,25 +733,27 @@ export default function ListDetail() {
     <div className="min-h-screen bg-background pb-8">
       {/* Header Atualizado com Menu Lateral e Lógica de Status */}
       <header className="sticky top-0 z-40 bg-background/90 backdrop-blur-lg border-b border-border transition-all">
-        <div className="flex items-center gap-2 px-4 py-4 max-w-md mx-auto">
+        <div className="flex items-center gap-2 px-4 py-3 max-w-md mx-auto">
           <Button
             variant="ghost"
             size="icon"
             onClick={() => isCompareMode ? navigate(-1) : navigate("/")}
-            className="h-10 w-10 -ml-2"
+            className="h-10 w-10 -ml-2 shrink-0"
           >
             <ArrowLeft className="w-5 h-5" />
           </Button>
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2">
-              <h1 className="text-lg font-display font-bold text-foreground truncate">{list.name}</h1>
-              {isClosed && <Lock className="w-3 h-3 text-muted-foreground" />}
+
+          <div className="flex-1 min-w-0 flex flex-col justify-center h-10">
+            <div className="flex items-center gap-1.5">
+              <h1 className="text-base font-display font-bold text-foreground truncate">{list.name}</h1>
+              {isClosed && <Lock className="w-3 h-3 text-muted-foreground shrink-0" />}
             </div>
-            <p className="text-sm text-muted-foreground truncate">
+
+            <p className="text-xs text-muted-foreground truncate leading-none mt-0.5">
               {isClosed
-                ? (totalPrice > 0 ? `Total final: R$ ${totalPrice.toFixed(2)}` : "Lista Fechada")
+                ? (totalPrice > 0 ? `Total: R$ ${totalPrice.toFixed(2)}` : "Fechada")
                 : isShoppingMode
-                  ? `${checkedCount}/${items.length} itens • R$ ${totalPrice.toFixed(2)}`
+                  ? `${checkedCount}/${items.length} • R$ ${totalPrice.toFixed(2)}`
                   : isCompareMode
                     ? `Simulação • R$ ${totalPrice.toFixed(2)}`
                     : `${items.length} ${items.length === 1 ? "item" : "itens"}`
@@ -740,22 +761,22 @@ export default function ListDetail() {
             </p>
           </div>
 
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-1 shrink-0">
             {!isShoppingMode && !isClosed && !isCompareMode && (
               <Button
                 onClick={() => setAddDialogOpen(true)}
                 size="icon"
                 variant="secondary"
-                className="h-10 w-10 rounded-xl text-primary"
+                className="h-9 w-9 rounded-xl text-primary"
               >
-                <Plus className="w-6 h-6" />
+                <Plus className="w-5 h-5" />
               </Button>
             )}
 
             {!isCompareMode && (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <Button variant="ghost" size="icon" className="h-10 w-10">
+                  <Button variant="ghost" size="icon" className="h-9 w-9">
                     <MoreVertical className="w-5 h-5 text-muted-foreground" />
                   </Button>
                 </DropdownMenuTrigger>
@@ -776,27 +797,29 @@ export default function ListDetail() {
               </DropdownMenu>
             )}
 
+            {/* Botão do Menu Principal do App */}
             <AppMenu />
           </div>
         </div>
 
+        {/* Banner informativo quando em modo comparação ou compras */}
         {(isShoppingMode || isCompareMode || (isClosed && selectedMarket)) && selectedMarket && (
           <div className="px-4 pb-3 max-w-md mx-auto">
             <div className={cn(
-              "flex items-center gap-2 p-2 rounded-lg text-sm border",
+              "flex items-center gap-2 p-2 rounded-lg text-xs sm:text-sm border",
               isClosed
                 ? "bg-muted text-muted-foreground border-border"
                 : isCompareMode
                   ? "bg-secondary text-secondary-foreground border-secondary"
                   : "bg-primary/10 text-primary border-primary/20"
             )}>
-              <Store className="w-4 h-4" />
+              <Store className="w-3.5 h-3.5 shrink-0" />
               <span className="font-medium truncate">
                 {isClosed
-                  ? `Comprado em: ${selectedMarket.name}`
+                  ? `Comprado: ${selectedMarket.name}`
                   : isCompareMode
-                    ? `Vendo preços de: ${selectedMarket.name}`
-                    : `Comprando em: ${selectedMarket.name}`
+                    ? `Preços: ${selectedMarket.name}`
+                    : `No mercado: ${selectedMarket.name}`
                 }
               </span>
             </div>
@@ -939,7 +962,7 @@ export default function ListDetail() {
         </div>
       )}
 
-      {/* Dialogs */}
+      {/* Dialog: Editar Nome */}
       <Dialog open={editNameDialogOpen} onOpenChange={setEditNameDialogOpen}>
         <DialogContent className="w-[90%] max-w-sm mx-auto rounded-2xl p-6">
           <DialogHeader>
@@ -964,6 +987,7 @@ export default function ListDetail() {
         </DialogContent>
       </Dialog>
 
+      {/* Dialog: Excluir Lista */}
       <AlertDialog open={deleteListDialogOpen} onOpenChange={setDeleteListDialogOpen}>
         <AlertDialogContent className="w-[90%] max-w-sm mx-auto rounded-2xl p-6">
           <AlertDialogHeader>
@@ -985,6 +1009,7 @@ export default function ListDetail() {
         </AlertDialogContent>
       </AlertDialog>
 
+      {/* Dialog: Duplicar Lista */}
       <Dialog open={duplicateDialogOpen} onOpenChange={setDuplicateDialogOpen}>
         <DialogContent className="w-[90%] max-w-sm mx-auto rounded-2xl p-6">
           <DialogHeader>
@@ -1012,6 +1037,7 @@ export default function ListDetail() {
         </DialogContent>
       </Dialog>
 
+      {/* Dialog: Adicionar Produtos */}
       <Dialog open={addDialogOpen} onOpenChange={closeAddDialog}>
         <DialogContent className="w-[95%] max-w-sm mx-auto rounded-2xl h-[85vh] p-0 gap-0 overflow-hidden flex flex-col">
           <DialogHeader className="p-4 pb-2 border-b border-border/50 bg-background z-10">
@@ -1111,6 +1137,7 @@ export default function ListDetail() {
         </DialogContent>
       </Dialog>
 
+      {/* Dialog: Finalizar Compras */}
       <AlertDialog open={finishDialogOpen} onOpenChange={setFinishDialogOpen}>
         <AlertDialogContent className="w-[90%] max-w-sm mx-auto rounded-2xl p-6">
           <AlertDialogHeader>
