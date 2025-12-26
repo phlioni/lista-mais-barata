@@ -1,154 +1,102 @@
-import { useState, useEffect } from "react";
-import { useParams, useNavigate, useSearchParams } from "react-router-dom";
-import { ArrowLeft, MapPin, Navigation, Store, ExternalLink, AlertTriangle, Loader2, ShoppingCart } from "lucide-react";
+// src/pages/MarketDetail.tsx
+import { useEffect, useState } from "react";
+import { useParams, useNavigate } from "react-router-dom";
+import { ArrowLeft, MapPin, Loader2, Pencil, Trash2, ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { BottomNav } from "@/components/BottomNav";
-import { useAuth } from "@/hooks/useAuth";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
-import { cn } from "@/lib/utils";
-import { getAddressFromCoordinates } from "@/lib/geocoding";
+import { MapSelector } from "@/components/MapSelector"; // <-- Importação nova
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 
 interface Market {
   id: string;
   name: string;
+  address: string | null;
   latitude: number;
   longitude: number;
-  address: string | null;
-}
-
-interface ProductPrice {
-  name: string;
-  brand: string | null;
-  quantity: number;
-  price: number | null;
 }
 
 export default function MarketDetail() {
-  const { marketId, listId } = useParams<{ marketId: string; listId: string }>();
-  const [searchParams] = useSearchParams();
+  const { id } = useParams();
   const navigate = useNavigate();
-  const { user, loading: authLoading } = useAuth();
   const { toast } = useToast();
-
   const [market, setMarket] = useState<Market | null>(null);
-  const [products, setProducts] = useState<ProductPrice[]>([]);
   const [loading, setLoading] = useState(true);
-  
-  const distance = parseFloat(searchParams.get("distance") || "0");
-  const totalPrice = parseFloat(searchParams.get("total") || "0");
+  const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
-    if (!authLoading && !user) {
-      navigate("/auth");
-    }
-  }, [user, authLoading, navigate]);
+    getMarket();
+  }, [id]);
 
-  useEffect(() => {
-    if (user && marketId && listId) {
-      fetchMarketDetails();
-    }
-  }, [user, marketId, listId]);
-
-  const fetchMarketDetails = async () => {
-    if (!marketId || !listId) return;
-
-    setLoading(true);
+  async function getMarket() {
     try {
-      // Fetch market info
-      const { data: marketData, error: marketError } = await supabase
+      if (!id) return;
+      const { data, error } = await supabase
         .from("markets")
         .select("*")
-        .eq("id", marketId)
+        .eq("id", id)
         .single();
 
-      if (marketError) throw marketError;
-      
-      // If market has no address, try to fetch it
-      let marketWithAddress = marketData;
-      if (!marketData.address) {
-        const address = await getAddressFromCoordinates(marketData.latitude, marketData.longitude);
-        if (address) {
-          // Update market with address in database
-          await supabase
-            .from("markets")
-            .update({ address })
-            .eq("id", marketId);
-          marketWithAddress = { ...marketData, address };
-        }
-      }
-      
-      setMarket(marketWithAddress);
-
-      // Fetch list items with products
-      const { data: itemsData, error: itemsError } = await supabase
-        .from("list_items")
-        .select(`
-          id,
-          product_id,
-          quantity,
-          products (id, name, brand)
-        `)
-        .eq("list_id", listId);
-
-      if (itemsError) throw itemsError;
-
-      // Fetch prices for this market
-      const productIds = itemsData.map((item: any) => item.product_id);
-      const { data: pricesData, error: pricesError } = await supabase
-        .from("market_prices")
-        .select("product_id, price")
-        .eq("market_id", marketId)
-        .in("product_id", productIds);
-
-      if (pricesError) throw pricesError;
-
-      // Combine data
-      const productPrices: ProductPrice[] = itemsData.map((item: any) => {
-        const priceEntry = pricesData.find((p: any) => p.product_id === item.product_id);
-        return {
-          name: item.products.name,
-          brand: item.products.brand,
-          quantity: item.quantity,
-          price: priceEntry?.price || null,
-        };
-      });
-
-      setProducts(productPrices);
+      if (error) throw error;
+      setMarket(data);
     } catch (error) {
-      console.error("Error fetching market details:", error);
+      console.error("Error fetching market:", error);
       toast({
         title: "Erro",
-        description: "Não foi possível carregar os detalhes",
+        description: "Não foi possível carregar os detalhes do mercado",
         variant: "destructive",
       });
+      navigate("/mercados");
     } finally {
       setLoading(false);
     }
-  };
+  }
 
-  const openGoogleMaps = () => {
-    if (!market) return;
-    const url = `https://www.google.com/maps/dir/?api=1&destination=${market.latitude},${market.longitude}`;
-    window.open(url, "_blank");
-  };
+  const handleDelete = async () => {
+    if (!id) return;
+    setDeleting(true);
+    try {
+      const { error } = await supabase
+        .from("markets")
+        .delete()
+        .eq("id", id);
 
-  const useThisList = () => {
-    if (!market || !listId) return;
-    // Navigate to list detail with market pre-selected and prices from this market
-    navigate(`/lista/${listId}?marketId=${market.id}&usePrices=true`);
-  };
+      if (error) throw error;
 
-  const calculatedTotal = products.reduce((acc, p) => {
-    if (p.price) {
-      return acc + (p.price * p.quantity);
+      toast({
+        title: "Sucesso",
+        description: "Mercado removido com sucesso",
+      });
+      navigate("/mercados");
+    } catch (error) {
+      console.error("Error deleting market:", error);
+      toast({
+        title: "Erro",
+        description: "Não foi possível remover o mercado. Verifique se existem preços associados a ele.",
+        variant: "destructive",
+      });
+    } finally {
+      setDeleting(false);
     }
-    return acc;
-  }, 0);
+  };
 
-  const missingItems = products.filter(p => !p.price).length;
+  const openInMaps = () => {
+    if (!market) return;
+    // Abre no app de mapas nativo do celular ou Google Maps web
+    window.open(`https://www.google.com/maps/search/?api=1&query=${market.latitude},${market.longitude}`, '_blank');
+  };
 
-  if (authLoading || loading) {
+  if (loading) {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
         <Loader2 className="w-8 h-8 animate-spin text-primary" />
@@ -156,142 +104,103 @@ export default function MarketDetail() {
     );
   }
 
-  if (!market) {
-    return (
-      <div className="min-h-screen bg-background flex items-center justify-center">
-        <p className="text-muted-foreground">Mercado não encontrado</p>
-      </div>
-    );
-  }
+  if (!market) return null;
 
   return (
-    <div className="min-h-screen bg-background pb-24">
-      {/* Header */}
-      <header className="sticky top-0 z-40 bg-background/80 backdrop-blur-lg border-b border-border">
-        <div className="flex items-center gap-3 px-4 py-4 max-w-md mx-auto">
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => navigate(-1)}
-          >
-            <ArrowLeft className="w-5 h-5" />
+    <div className="min-h-screen bg-background pb-safe">
+      <header className="flex items-center justify-between px-4 py-4 bg-background/95 backdrop-blur-md border-b border-border sticky top-0 z-40">
+        <div className="flex items-center gap-3">
+          <Button variant="ghost" size="icon" onClick={() => navigate(-1)} className="-ml-2">
+            <ArrowLeft className="w-6 h-6" />
           </Button>
-          <div className="flex-1">
-            <h1 className="text-lg font-display font-bold text-foreground">{market.name}</h1>
-            <p className="text-sm text-muted-foreground flex items-center gap-1">
-              <MapPin className="w-3 h-3" />
-              {distance > 0 ? `${distance.toFixed(1)} km de distância` : "Localização salva"}
-            </p>
-          </div>
+          <h1 className="text-xl font-display font-bold truncate max-w-[200px]">
+            Detalhes
+          </h1>
+        </div>
+
+        <div className="flex gap-2">
+          {/* Botão de Editar (Placeholder por enquanto) */}
+          <Button variant="ghost" size="icon" disabled>
+            <Pencil className="w-5 h-5 text-muted-foreground" />
+          </Button>
+
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <Button variant="ghost" size="icon" className="text-destructive hover:text-destructive hover:bg-destructive/10">
+                <Trash2 className="w-5 h-5" />
+              </Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent className="w-[90%] rounded-xl">
+              <AlertDialogHeader>
+                <AlertDialogTitle>Excluir mercado?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  Esta ação não pode ser desfeita. Isso excluirá permanentemente o mercado
+                  <span className="font-semibold text-foreground"> {market.name} </span>
+                  do banco de dados.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Cancelar</AlertDialogCancel>
+                <AlertDialogAction
+                  onClick={handleDelete}
+                  className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                  disabled={deleting}
+                >
+                  {deleting ? "Excluindo..." : "Sim, excluir"}
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
         </div>
       </header>
 
-      <main className="px-4 py-4 max-w-md mx-auto">
-        {/* Market Info Card */}
-        <div className="bg-card rounded-2xl border border-border shadow-soft p-4 mb-6">
-          <div className="flex items-center gap-3 mb-4">
-            <div className="flex items-center justify-center w-12 h-12 rounded-xl bg-primary/10">
-              <Store className="w-6 h-6 text-primary" />
-            </div>
-            <div className="flex-1">
-              <h2 className="font-semibold text-foreground">{market.name}</h2>
-              {market.address ? (
-                <p className="text-sm text-muted-foreground">{market.address}</p>
-              ) : (
-                <p className="text-sm text-muted-foreground">
-                  📍 {market.latitude.toFixed(5)}, {market.longitude.toFixed(5)}
-                </p>
-              )}
-            </div>
-          </div>
+      <div className="p-4 space-y-6">
+        {/* Mapa Estático */}
+        <div className="h-56 rounded-2xl overflow-hidden shadow-sm border border-border relative group">
+          <MapSelector
+            selectedLocation={{ lat: market.latitude, lng: market.longitude }}
+            readOnly={true} // Modo leitura
+            className="w-full h-full"
+          />
 
-          <div className="flex flex-col gap-2">
-            <Button
-              onClick={useThisList}
-              className="w-full h-12"
-            >
-              <ShoppingCart className="w-5 h-5" />
-              Usar Esta Lista
-            </Button>
-            <Button
-              onClick={openGoogleMaps}
-              className="w-full h-12"
-              variant="outline"
-            >
-              <Navigation className="w-5 h-5" />
-              Abrir no Google Maps
-              <ExternalLink className="w-4 h-4 ml-auto" />
-            </Button>
-          </div>
+          {/* Botão flutuante para abrir no app de mapas */}
+          <Button
+            size="sm"
+            className="absolute bottom-3 right-3 shadow-lg gap-2 z-[400]"
+            onClick={openInMaps}
+          >
+            <ExternalLink className="w-3.5 h-3.5" />
+            Abrir GPS
+          </Button>
         </div>
 
-        {/* Price Summary */}
-        <div className="bg-gradient-to-br from-primary/10 to-primary/5 rounded-2xl p-4 mb-6">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-muted-foreground">Total estimado</span>
-            <span className="text-2xl font-bold text-primary">
-              R$ {(totalPrice || calculatedTotal).toFixed(2)}
-            </span>
-          </div>
-          {missingItems > 0 && (
-            <div className="flex items-center gap-2 text-warning text-sm">
-              <AlertTriangle className="w-4 h-4" />
-              <span>{missingItems} {missingItems === 1 ? "item sem preço" : "itens sem preço"}</span>
+        {/* Informações */}
+        <div className="space-y-4">
+          <div>
+            <h2 className="text-2xl font-bold text-foreground mb-1">{market.name}</h2>
+            <div className="flex items-start gap-2 text-muted-foreground">
+              <MapPin className="w-4 h-4 mt-1 flex-shrink-0" />
+              <p className="text-sm leading-snug">
+                {market.address || "Endereço não informado"}
+              </p>
             </div>
-          )}
-        </div>
+          </div>
 
-        {/* Products List */}
-        <div className="space-y-3">
-          <h3 className="font-semibold text-foreground">Itens da Lista</h3>
-          
-          {products.map((product, index) => (
-            <div
-              key={index}
-              className={cn(
-                "flex items-center justify-between p-3 bg-card rounded-xl border border-border",
-                "animate-slide-up"
-              )}
-              style={{ animationDelay: `${index * 50}ms` }}
-            >
-              <div className="flex-1 min-w-0">
-                <p className={cn(
-                  "font-medium",
-                  product.price ? "text-foreground" : "text-muted-foreground"
-                )}>
-                  {product.name}
-                </p>
-                <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                  {product.brand && <span>{product.brand}</span>}
-                  <span>Qtd: {product.quantity}</span>
-                </div>
-              </div>
-              
-              <div className="text-right">
-                {product.price ? (
-                  <>
-                    <p className="font-bold text-primary">
-                      R$ {product.price.toFixed(2)}
-                    </p>
-                    {product.quantity > 1 && (
-                      <p className="text-xs text-muted-foreground">
-                        Total: R$ {(product.price * product.quantity).toFixed(2)}
-                      </p>
-                    )}
-                  </>
-                ) : (
-                  <div className="flex items-center gap-1 text-warning">
-                    <AlertTriangle className="w-4 h-4" />
-                    <span className="text-sm">Sem preço</span>
-                  </div>
-                )}
+          {/* Aqui você pode adicionar estatísticas futuras, como "X produtos cadastrados" */}
+          <div className="grid grid-cols-2 gap-3">
+            <div className="bg-secondary/30 p-4 rounded-xl border border-border/50">
+              <p className="text-xs text-muted-foreground font-medium mb-1">Cadastrado em</p>
+              <p className="text-sm font-semibold">Hoje</p> {/* Placeholder, pode formatar created_at se tiver */}
+            </div>
+            <div className="bg-secondary/30 p-4 rounded-xl border border-border/50">
+              <p className="text-xs text-muted-foreground font-medium mb-1">Status</p>
+              <div className="inline-flex items-center px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 text-xs font-medium">
+                Ativo
               </div>
             </div>
-          ))}
+          </div>
         </div>
-      </main>
-
-      <BottomNav />
+      </div>
     </div>
   );
 }

@@ -1,24 +1,24 @@
+// src/components/MarketSelector.tsx
 import { useState, useEffect } from "react";
-import { Store, Plus, MapPin, Loader2, ChevronDown } from "lucide-react";
+import { Check, MapPin, Search, Store, X, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { supabase } from "@/integrations/supabase/client";
+import { Input } from "@/components/ui/input";
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import { cn, calculateDistance } from "@/lib/utils";
-import { useNavigate, useParams } from "react-router-dom"; // Import useNavigate e useParams
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { supabase } from "@/integrations/supabase/client";
+import { cn } from "@/lib/utils";
+import { useNavigate, useLocation } from "react-router-dom";
 
 interface Market {
   id: string;
   name: string;
-  latitude: number;
-  longitude: number;
   address: string | null;
-  distance?: number;
 }
 
 interface MarketSelectorProps {
@@ -27,168 +27,159 @@ interface MarketSelectorProps {
 }
 
 export function MarketSelector({ selectedMarket, onSelectMarket }: MarketSelectorProps) {
+  const [open, setOpen] = useState(false);
   const [markets, setMarkets] = useState<Market[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null);
-  const [locationError, setLocationError] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [loading, setLoading] = useState(false);
 
-  const navigate = useNavigate(); // Hook para navegação
-  const { id: listId } = useParams(); // Pega o ID da lista atual para voltar depois
+  const navigate = useNavigate();
+  const location = useLocation();
 
+  // Carrega os mercados apenas quando o modal é aberto para economizar recursos
   useEffect(() => {
-    if ("geolocation" in navigator) {
-      navigator.geolocation.getCurrentPosition(
-        (position) => {
-          setUserLocation({
-            lat: position.coords.latitude,
-            lng: position.coords.longitude,
-          });
-        },
-        (error) => {
-          console.error("Erro ao obter localização:", error);
-          setLocationError(true);
-        }
-      );
-    } else {
-      setLocationError(true);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (userLocation || locationError) {
+    if (open && markets.length === 0) {
       fetchMarkets();
     }
-  }, [userLocation, locationError]);
+  }, [open]);
 
-  const fetchMarkets = async () => {
+  async function fetchMarkets() {
     setLoading(true);
     try {
-      const { data, error } = await supabase
+      const { data } = await supabase
         .from("markets")
-        .select("*")
+        .select("id, name, address")
         .order("name");
 
-      if (error) throw error;
-
-      let processedMarkets = data || [];
-
-      if (userLocation) {
-        processedMarkets = processedMarkets
-          .map((market) => ({
-            ...market,
-            distance: calculateDistance(
-              userLocation.lat,
-              userLocation.lng,
-              market.latitude,
-              market.longitude
-            ),
-          }))
-          .filter((market) => market.distance <= 10)
-          .sort((a, b) => a.distance - b.distance);
-      }
-
-      setMarkets(processedMarkets);
+      if (data) setMarkets(data);
     } catch (error) {
       console.error("Error fetching markets:", error);
     } finally {
       setLoading(false);
     }
+  }
+
+  const filteredMarkets = markets.filter(market =>
+    market.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    (market.address && market.address.toLowerCase().includes(searchQuery.toLowerCase()))
+  );
+
+  const handleSelect = (market: Market) => {
+    onSelectMarket(market);
+    setOpen(false);
   };
 
-  const handleCreateNewMarket = () => {
-    // Redireciona para a página de criação
-    // Passa o ID da lista atual na URL (returnTo) para que a página de criação saiba voltar pra cá
-    const returnUrl = listId ? `/lista/${listId}` : "/";
-    navigate(`/mercados/novo?returnTo=${encodeURIComponent(returnUrl)}`);
+  const handleCreateNew = () => {
+    setOpen(false);
+    // Salva a rota atual para retornar após o cadastro
+    const returnUrl = encodeURIComponent(location.pathname + location.search);
+    navigate(`/mercados/novo?returnTo=${returnUrl}`);
   };
 
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild>
         <Button
           variant="outline"
-          className={cn(
-            "w-full h-14 py-2 justify-between rounded-xl shadow-sm active:scale-[0.98] transition-all",
-            selectedMarket && "border-primary text-primary bg-primary/5"
-          )}
+          role="combobox"
+          aria-expanded={open}
+          className="w-full justify-between h-14 px-4 rounded-xl border-border bg-card hover:bg-accent/50 group"
         >
-          <div className="flex items-center gap-3 text-left overflow-hidden">
-            <div className="p-2 bg-background rounded-full border border-border flex-shrink-0">
-              <Store className="w-5 h-5" />
+          <div className="flex items-center gap-3 overflow-hidden">
+            <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center flex-shrink-0 group-hover:bg-primary/20 transition-colors">
+              <Store className="w-4 h-4 text-primary" />
             </div>
-            <div className="min-w-0 flex-1">
-              <span className="block truncate font-medium text-base">
-                {selectedMarket ? selectedMarket.name : "Onde você vai comprar?"}
+            <div className="flex flex-col items-start truncate">
+              <span className="text-xs text-muted-foreground font-medium">Mercado selecionado</span>
+              <span className="text-sm font-semibold truncate text-foreground">
+                {selectedMarket ? selectedMarket.name : "Selecione um mercado..."}
               </span>
-              {selectedMarket?.address ? (
-                <span className="block text-xs text-muted-foreground truncate font-normal">
-                  {selectedMarket.address}
-                </span>
-              ) : !selectedMarket && userLocation ? (
-                <span className="block text-xs text-muted-foreground font-normal">
-                  Mostrando mercados próximos (10km)
-                </span>
-              ) : null}
             </div>
           </div>
-          <ChevronDown className="w-5 h-5 opacity-50 flex-shrink-0 ml-2" />
+          <Search className="w-4 h-4 text-muted-foreground opacity-50 shrink-0" />
         </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent
-        className="w-[calc(100vw-2rem)] max-w-sm max-h-[60vh] overflow-y-auto rounded-xl"
-        align="start"
-        sideOffset={8}
-      >
-        {loading ? (
-          <div className="flex flex-col items-center justify-center py-6 gap-2">
-            <Loader2 className="w-6 h-6 animate-spin text-primary" />
-            <p className="text-xs text-muted-foreground">Buscando mercados próximos...</p>
-          </div>
-        ) : markets.length === 0 ? (
-          <div className="p-4 text-center text-muted-foreground">
-            <p className="text-sm font-medium">Nenhum mercado próximo encontrado</p>
-            <p className="text-xs mt-1">Tente cadastrar um novo mercado</p>
-          </div>
-        ) : (
-          markets.map((market) => (
-            <DropdownMenuItem
-              key={market.id}
-              onClick={() => onSelectMarket(market)}
-              className={cn(
-                "cursor-pointer flex-col items-start py-3 px-3 my-1 rounded-lg",
-                selectedMarket?.id === market.id && "bg-primary/10 text-primary focus:bg-primary/15"
-              )}
-            >
-              <div className="flex items-center justify-between w-full gap-2">
-                <div className="flex items-center gap-2 min-w-0">
-                  <Store className="w-4 h-4 flex-shrink-0" />
-                  <span className="font-medium truncate">{market.name}</span>
-                </div>
-                {market.distance !== undefined && (
-                  <span className="text-[10px] bg-secondary px-1.5 py-0.5 rounded text-secondary-foreground whitespace-nowrap">
-                    {market.distance < 1
-                      ? `${(market.distance * 1000).toFixed(0)}m`
-                      : `${market.distance.toFixed(1)}km`}
-                  </span>
-                )}
-              </div>
-              <span className="text-xs text-muted-foreground ml-6 truncate max-w-full block mt-0.5">
-                {market.address || `${market.latitude.toFixed(5)}, ${market.longitude.toFixed(5)}`}
-              </span>
-            </DropdownMenuItem>
-          ))
-        )}
-        <DropdownMenuSeparator />
+      </DialogTrigger>
 
-        {/* Atualizado para usar navegação */}
-        <DropdownMenuItem
-          onClick={handleCreateNewMarket}
-          className="cursor-pointer text-primary py-3 justify-center font-medium hover:bg-primary/5 focus:bg-primary/5"
-        >
-          <Plus className="w-4 h-4 mr-2" />
-          Cadastrar novo mercado
-        </DropdownMenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
+      <DialogContent className="w-[95%] max-w-md rounded-2xl p-0 gap-0 overflow-hidden bg-background">
+        <DialogHeader className="p-4 border-b border-border/50">
+          <DialogTitle>Escolha o Mercado</DialogTitle>
+        </DialogHeader>
+
+        <div className="p-4 pb-2">
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+            <Input
+              placeholder="Buscar por nome ou endereço..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="pl-9 h-11 rounded-xl bg-secondary/30 border-transparent focus:bg-background focus:border-primary"
+            />
+            {searchQuery && (
+              <button
+                onClick={() => setSearchQuery("")}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground p-1"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            )}
+          </div>
+        </div>
+
+        <ScrollArea className="h-[40vh] p-4 pt-0">
+          {loading ? (
+            <div className="py-8 text-center text-sm text-muted-foreground">Carregando mercados...</div>
+          ) : filteredMarkets.length === 0 ? (
+            <div className="py-8 text-center space-y-2">
+              <p className="text-sm text-muted-foreground">Nenhum mercado encontrado.</p>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {filteredMarkets.map((market) => (
+                <button
+                  key={market.id}
+                  onClick={() => handleSelect(market)}
+                  className={cn(
+                    "w-full flex items-start gap-3 p-3 rounded-xl text-left transition-all border",
+                    selectedMarket?.id === market.id
+                      ? "bg-primary/5 border-primary/30 ring-1 ring-primary/20"
+                      : "bg-card border-border hover:border-primary/30 hover:bg-accent/50"
+                  )}
+                >
+                  <MapPin className={cn(
+                    "w-5 h-5 mt-0.5 flex-shrink-0",
+                    selectedMarket?.id === market.id ? "text-primary" : "text-muted-foreground"
+                  )} />
+                  <div className="flex-1 min-w-0">
+                    <p className={cn(
+                      "font-medium leading-none mb-1.5",
+                      selectedMarket?.id === market.id ? "text-primary" : "text-foreground"
+                    )}>
+                      {market.name}
+                    </p>
+                    <p className="text-xs text-muted-foreground leading-snug line-clamp-2">
+                      {market.address || "Endereço não cadastrado"}
+                    </p>
+                  </div>
+                  {selectedMarket?.id === market.id && (
+                    <Check className="w-5 h-5 text-primary flex-shrink-0" />
+                  )}
+                </button>
+              ))}
+            </div>
+          )}
+        </ScrollArea>
+
+        {/* Rodapé fixo com o botão de criar */}
+        <div className="p-4 border-t border-border bg-background z-10">
+          <Button
+            variant="secondary"
+            className="w-full gap-2 h-12 rounded-xl border border-border/50 shadow-sm"
+            onClick={handleCreateNew}
+          >
+            <Plus className="w-4 h-4" />
+            Cadastrar novo mercado
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }

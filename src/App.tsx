@@ -12,7 +12,7 @@ import Compare from "./pages/Compare";
 import Markets from "./pages/Markets";
 import Profile from "./pages/Profile";
 import PriceManager from "./pages/PriceManager";
-import CreateMarket from "./pages/CreateMarket"; // Importe a nova página
+import CreateMarket from "./pages/CreateMarket";
 
 const queryClient = new QueryClient();
 
@@ -26,10 +26,17 @@ const App = () => (
           <Routes>
             <Route path="/" element={<Index />} />
             <Route path="/auth" element={<Auth />} />
+
+            {/* Rota padrão da lista */}
             <Route path="/lista/:id" element={<ListDetail />} />
+
+            {/* --- NOVA ROTA ADICIONADA --- */}
+            {/* Esta é a rota que estava faltando e causando o erro 404 */}
+            <Route path="/mercado/:marketId/:listId" element={<ListDetail />} />
+
             <Route path="/comparar/:id" element={<Compare />} />
             <Route path="/mercados" element={<Markets />} />
-            <Route path="/mercados/novo" element={<CreateMarket />} /> {/* Nova Rota */}
+            <Route path="/mercados/novo" element={<CreateMarket />} />
             <Route path="/perfil" element={<Profile />} />
             <Route path="/precos" element={<PriceManager />} />
             <Route path="*" element={<NotFound />} />
