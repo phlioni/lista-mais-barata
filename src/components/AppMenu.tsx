@@ -12,7 +12,7 @@ export function AppMenu() {
     const menuItems = [
         { path: "/", icon: ShoppingCart, label: "Minhas Listas" },
         { path: "/mercados", icon: MapPin, label: "Mercados" },
-        { path: "/perfil", icon: User, label: "Perfil" },
+
     ];
 
     return (

@@ -1,12 +1,11 @@
 import { useState, useEffect } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { ArrowLeft, MapPin, Loader2, Search, Sparkles } from "lucide-react";
+import { ArrowLeft, MapPin, Loader2, Sparkles } from "lucide-react"; // Removido Search não utilizado
 import { Button } from "@/components/ui/button";
 import { RadiusSelector } from "@/components/RadiusSelector";
 import { MarketCard } from "@/components/MarketCard";
 import { EmptyState } from "@/components/EmptyState";
-import { AppMenu } from "@/components/AppMenu"; // Alteração: Importando AppMenu
-// import { BottomNav } from "@/components/BottomNav"; // Removido
+import { AppMenu } from "@/components/AppMenu";
 import { useAuth } from "@/hooks/useAuth";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
@@ -48,7 +47,7 @@ interface MarketResult {
   isRecommended: boolean;
 }
 
-// Haversine formula to calculate distance between two points
+// Fórmula de Haversine para calcular distância
 function calculateDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
   const R = 6371;
   const dLat = (lat2 - lat1) * Math.PI / 180;
@@ -96,6 +95,7 @@ export default function Compare() {
           });
         },
         () => {
+          // Fallback SP
           setUserLocation({ lat: -23.5505, lng: -46.6333 });
         }
       );
@@ -103,6 +103,30 @@ export default function Compare() {
       setUserLocation({ lat: -23.5505, lng: -46.6333 });
     }
   }, []);
+
+  // --- NOVO: Atualização em Tempo Real ---
+  useEffect(() => {
+    if (!hasSearched) return;
+
+    // Escuta mudanças na tabela de preços
+    const channel = supabase
+      .channel('compare-realtime')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'market_prices' },
+        (payload) => {
+          console.log("Preço alterado externamente, recalculando...", payload);
+          // Recalcula a comparação silenciosamente (sem loading spinner agressivo)
+          compareMarkets(true);
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [hasSearched, id, userLocation, radius]);
+  // ---------------------------------------
 
   const fetchListName = async () => {
     if (!id) return;
@@ -121,14 +145,15 @@ export default function Compare() {
     }
   };
 
-  const compareMarkets = async () => {
+  // Adicionei o parâmetro silent para atualizações em tempo real não piscarem a tela
+  const compareMarkets = async (silent = false) => {
     if (!id || !userLocation) return;
 
-    setLoading(true);
+    if (!silent) setLoading(true);
     setHasSearched(true);
 
     try {
-      // Fetch list items
+      // 1. Busca itens da lista
       const { data: itemsData, error: itemsError } = await supabase
         .from("list_items")
         .select(`
@@ -143,23 +168,25 @@ export default function Compare() {
       const items = itemsData as ListItem[];
 
       if (items.length === 0) {
-        toast({
-          title: "Lista vazia",
-          description: "Adicione produtos à lista antes de comparar",
-          variant: "destructive",
-        });
+        if (!silent) {
+          toast({
+            title: "Lista vazia",
+            description: "Adicione produtos à lista antes de comparar",
+            variant: "destructive",
+          });
+        }
         setLoading(false);
         return;
       }
 
-      // Fetch all markets
+      // 2. Busca todos os mercados
       const { data: marketsData, error: marketsError } = await supabase
         .from("markets")
         .select("*");
 
       if (marketsError) throw marketsError;
 
-      // Filter markets within radius
+      // 3. Filtra pelo raio (Cálculo Local)
       const marketsInRadius = (marketsData as Market[]).filter((market) => {
         const distance = calculateDistance(
           userLocation.lat,
@@ -176,7 +203,7 @@ export default function Compare() {
         return;
       }
 
-      // Fetch prices
+      // 4. Busca preços para esses mercados e produtos
       const productIds = items.map((item) => item.product_id);
       const marketIds = marketsInRadius.map((market) => market.id);
 
@@ -189,7 +216,7 @@ export default function Compare() {
       if (pricesError) throw pricesError;
       const prices = pricesData as MarketPrice[];
 
-      // Calculate results for each market
+      // 5. Calcula totais (Cálculo Local)
       const marketResults: MarketResult[] = marketsInRadius.map((market) => {
         const distance = calculateDistance(
           userLocation.lat,
@@ -231,51 +258,47 @@ export default function Compare() {
         };
       });
 
-      // Filter: only show markets with at least some prices (> 0) and coverage >= 30%
+      // Filtra e ordena
       const viableMarkets = marketResults.filter(
         (m) => m.totalPrice > 0 && m.coveragePercent >= 30
       );
 
-      // Smart sort: prioritize complete markets, then by real cost
       viableMarkets.sort((a, b) => {
-        // First: prefer complete lists
         if (a.missingItems === 0 && b.missingItems > 0) return -1;
         if (b.missingItems === 0 && a.missingItems > 0) return 1;
-
-        // Second: if both have same completion status, sort by real cost
         return a.realCost - b.realCost;
       });
 
-      // Mark the best option as recommended
+      // Marca recomendação
       if (viableMarkets.length > 0) {
-        // Find the best recommendation considering all factors
         let recommendedIndex = 0;
-
-        // If first has missing items but another one has all items with similar price, prefer complete
         const completeMarkets = viableMarkets.filter(m => m.missingItems === 0);
+
         if (completeMarkets.length > 0) {
           const bestComplete = completeMarkets[0];
           const priceDiff = viableMarkets[0].realCost - bestComplete.realCost;
-
-          // If complete market costs less than 20% more, recommend it
+          // Se o completo custa menos que 20% a mais que o incompleto mais barato, recomenda o completo
           if (priceDiff < 0 || (viableMarkets[0].missingItems > 0 && priceDiff / viableMarkets[0].realCost < 0.2)) {
             recommendedIndex = viableMarkets.findIndex(m => m.id === bestComplete.id);
           }
         }
-
-        viableMarkets[recommendedIndex].isRecommended = true;
+        if (viableMarkets[recommendedIndex]) {
+          viableMarkets[recommendedIndex].isRecommended = true;
+        }
       }
 
       setResults(viableMarkets.slice(0, 5));
     } catch (error) {
       console.error("Error comparing markets:", error);
-      toast({
-        title: "Erro",
-        description: "Não foi possível comparar os preços",
-        variant: "destructive",
-      });
+      if (!silent) {
+        toast({
+          title: "Erro",
+          description: "Não foi possível comparar os preços",
+          variant: "destructive",
+        });
+      }
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   };
 
@@ -288,16 +311,15 @@ export default function Compare() {
   }
 
   return (
-    <div className="min-h-screen bg-background pb-8"> {/* Alteração: pb-24 -> pb-8 pois não tem mais BottomNav */}
+    <div className="min-h-screen bg-background pb-8">
       {/* Header */}
       <header className="sticky top-0 z-40 bg-background/80 backdrop-blur-lg border-b border-border">
-        {/* Alteração: Justify-between para acomodar o menu */}
         <div className="flex items-center justify-between px-4 py-4 max-w-md mx-auto">
           <div className="flex items-center gap-3">
             <Button
               variant="ghost"
               size="icon"
-              onClick={() => navigate(`/lista/${id}`)}
+              onClick={() => navigate(`/lista/${id}`)} // Corrigido o link de voltar
             >
               <ArrowLeft className="w-5 h-5" />
             </Button>
@@ -306,7 +328,7 @@ export default function Compare() {
               <p className="text-sm text-muted-foreground">{listName}</p>
             </div>
           </div>
-          <AppMenu /> {/* Alteração: Menu Lateral Adicionado */}
+          <AppMenu />
         </div>
       </header>
 
@@ -329,7 +351,7 @@ export default function Compare() {
 
         {/* Search Button */}
         <Button
-          onClick={compareMarkets}
+          onClick={() => compareMarkets(false)}
           className="w-full h-14 mb-6"
           size="lg"
           disabled={loading || !userLocation}
@@ -338,7 +360,7 @@ export default function Compare() {
             <Loader2 className="w-5 h-5 animate-spin" />
           ) : (
             <>
-              <Sparkles className="w-5 h-5" />
+              <Sparkles className="w-5 h-5 mr-2" />
               Buscar Melhores Preços
             </>
           )}
@@ -377,8 +399,6 @@ export default function Compare() {
           </>
         )}
       </main>
-
-      {/* <BottomNav /> Removido conforme solicitado */}
     </div>
   );
 }

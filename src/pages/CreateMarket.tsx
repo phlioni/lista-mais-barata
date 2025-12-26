@@ -1,14 +1,15 @@
+// src/pages/CreateMarket.tsx
 import { useState, useEffect } from "react";
 import { ArrowLeft, MapPin, Loader2, Save } from "lucide-react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { GoogleMap } from "@/components/GoogleMap";
+import { MapSelector } from "@/components/MapSelector"; // Importação alterada
 import { useAuth } from "@/hooks/useAuth";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { getAddressFromCoordinates } from "@/lib/geocoding";
-import { cn } from "@/lib/utils";
+// import { cn } from "@/lib/utils"; // (Opcional: descomente se precisar usar cn diretamente neste arquivo)
 
 export default function CreateMarket() {
     const navigate = useNavigate();
@@ -16,7 +17,7 @@ export default function CreateMarket() {
     const { user, loading: authLoading } = useAuth();
     const { toast } = useToast();
 
-    const returnTo = searchParams.get("returnTo"); // Para saber pra onde voltar (ex: lista)
+    const returnTo = searchParams.get("returnTo");
 
     const [name, setName] = useState("");
     const [selectedLocation, setSelectedLocation] = useState<{ lat: number; lng: number } | null>(null);
@@ -125,7 +126,7 @@ export default function CreateMarket() {
 
                 {/* Mapa (Ocupa o resto da tela) */}
                 <div className="flex-1 relative min-h-[300px] bg-muted/20">
-                    <GoogleMap
+                    <MapSelector
                         onLocationSelect={(lat, lng) => setSelectedLocation({ lat, lng })}
                         selectedLocation={selectedLocation}
                         className="absolute inset-0 w-full h-full"
@@ -133,7 +134,7 @@ export default function CreateMarket() {
 
                     {/* Aviso sobre o mapa */}
                     {!selectedLocation && (
-                        <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-background/90 backdrop-blur px-4 py-2 rounded-full shadow-lg border border-border/50 pointer-events-none">
+                        <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-background/90 backdrop-blur px-4 py-2 rounded-full shadow-lg border border-border/50 pointer-events-none z-10">
                             <p className="text-xs font-medium text-foreground flex items-center gap-2">
                                 <MapPin className="w-3.5 h-3.5 text-primary" />
                                 Toque no mapa para marcar

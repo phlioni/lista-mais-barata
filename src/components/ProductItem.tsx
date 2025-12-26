@@ -1,8 +1,8 @@
 import { Minus, Plus, Trash2, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
-import { memo } from "react";
 
 interface ProductItemProps {
   id: string;
@@ -19,128 +19,130 @@ interface ProductItemProps {
   onRemove: (id: string) => void;
 }
 
-export const ProductItem = memo(function ProductItem({
+export function ProductItem({
   id,
   name,
   brand,
   quantity,
   isChecked,
   price,
-  showPriceInput,
+  showPriceInput = false,
   readonly = false,
   onToggleCheck,
   onUpdateQuantity,
   onUpdatePrice,
   onRemove,
 }: ProductItemProps) {
-
   return (
     <div
       className={cn(
-        "group relative flex flex-col gap-3 p-4 rounded-xl border transition-all duration-200 bg-card",
-        isChecked ? "border-transparent bg-muted/40" : "border-border/50 shadow-sm",
-        readonly && "opacity-90 pointer-events-none" // Menor opacidade para indicar estado
+        "group flex items-center gap-3 p-3 rounded-xl border transition-all duration-200",
+        isChecked
+          ? "bg-muted/50 border-transparent opacity-75"
+          : "bg-card border-border shadow-sm hover:border-primary/20 hover:shadow-md"
       )}
     >
-      <div className="flex items-start gap-3">
-        {/* Checkbox Area */}
-        <button
-          onClick={() => !readonly && onToggleCheck(id)}
-          disabled={readonly}
+      {/* Checkbox */}
+      {!readonly && (
+        <Checkbox
+          checked={isChecked}
+          onCheckedChange={() => onToggleCheck(id)}
+          className="w-5 h-5 rounded-md border-2 data-[state=checked]:bg-primary data-[state=checked]:border-primary transition-colors flex-shrink-0"
+        />
+      )}
+
+      {/* Informações de Texto */}
+      <div className={cn("flex-1 min-w-0", readonly && "pl-1")}>
+        <p
           className={cn(
-            "mt-0.5 flex h-6 w-6 items-center justify-center rounded-full border-2 transition-all duration-200 flex-shrink-0",
-            isChecked
-              ? "border-transparent bg-primary text-primary-foreground"
-              : "border-muted-foreground/30 hover:border-primary/50",
-            readonly && isChecked && "bg-muted-foreground border-transparent opacity-50"
+            "font-medium text-sm leading-tight truncate transition-all",
+            isChecked ? "text-muted-foreground line-through decoration-border" : "text-foreground"
           )}
         >
-          {isChecked && <Check className="h-3.5 w-3.5" strokeWidth={3} />}
-        </button>
-
-        {/* Product Info */}
-        <div className="flex-1 min-w-0 pt-0.5">
-          <h3 className={cn(
-            "font-medium leading-tight transition-all text-base",
-            isChecked ? "text-muted-foreground line-through decoration-border/50" : "text-foreground"
-          )}>
-            {name}
-          </h3>
-          {brand && (
-            <p className="text-sm text-muted-foreground mt-0.5 truncate">{brand}</p>
-          )}
-        </div>
-
-        {/* Remove Button (Only if not readonly) */}
-        {!readonly && (
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => onRemove(id)}
-            className="h-8 w-8 text-muted-foreground/50 hover:text-destructive hover:bg-destructive/10 -mt-1 -mr-1"
-          >
-            <Trash2 className="w-4 h-4" />
-          </Button>
+          {name}
+        </p>
+        {brand && (
+          <p className="text-[11px] text-muted-foreground truncate mt-0.5 font-medium">
+            {brand}
+          </p>
         )}
       </div>
 
-      {/* Controls Area (Price & Quantity) */}
-      <div className="flex items-center justify-between gap-3 pl-9">
-        {/* Price Input (Only in Shopping Mode) or Static Price */}
-        {showPriceInput ? (
-          <div className="flex items-center gap-2 flex-1 max-w-[140px]">
-            <span className="text-sm font-medium text-muted-foreground">R$</span>
+      {/* Controles e Preço */}
+      <div className="flex items-center gap-2 flex-shrink-0">
+
+        {/* Input de Preço (Modo Compras) */}
+        {showPriceInput && (
+          <div className="relative w-[85px]">
+            <span className="absolute left-2 top-1/2 -translate-y-1/2 text-xs text-muted-foreground font-medium">
+              R$
+            </span>
             <Input
               type="number"
               inputMode="decimal"
               placeholder="0,00"
               value={price || ""}
               onChange={(e) => onUpdatePrice(id, parseFloat(e.target.value))}
-              className="h-10 px-3 text-right font-medium tabular-nums rounded-lg bg-background/50 focus:bg-background"
-              disabled={readonly}
+              className="h-8 pl-7 pr-2 text-sm text-right font-medium bg-background/50 border-input shadow-none focus-visible:ring-1 focus-visible:bg-background"
             />
-          </div>
-        ) : (
-          <div className="text-sm font-semibold text-primary">
-            {price && price > 0 ? `R$ ${price.toFixed(2)}` : ""}
           </div>
         )}
 
-        {/* Quantity Controls */}
-        <div className={cn(
-          "flex items-center rounded-lg p-0.5 border border-transparent transition-colors ml-auto",
-          !readonly ? "bg-secondary/50 hover:border-border/50" : ""
-        )}>
-          {!readonly ? (
-            <>
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={() => onUpdateQuantity(id, Math.max(1, quantity - 1))}
-                className="h-8 w-8 rounded-md hover:bg-background shadow-sm"
-                disabled={quantity <= 1}
-              >
-                <Minus className="w-3.5 h-3.5" />
-              </Button>
-              <span className="w-8 text-center text-sm font-medium tabular-nums">
-                {quantity}
-              </span>
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={() => onUpdateQuantity(id, quantity + 1)}
-                className="h-8 w-8 rounded-md hover:bg-background shadow-sm"
-              >
-                <Plus className="w-3.5 h-3.5" />
-              </Button>
-            </>
-          ) : (
-            <div className="px-2 py-1 text-xs font-medium text-muted-foreground bg-muted/50 rounded-md">
-              Qtd: {quantity}
-            </div>
-          )}
-        </div>
+        {/* Exibição de Preço (Modo Leitura/Comparação) */}
+        {!showPriceInput && price !== undefined && price > 0 && (
+          <div className="text-right px-1">
+            <p className="text-sm font-bold text-emerald-600">
+              R$ {(price * quantity).toFixed(2)}
+            </p>
+            {quantity > 1 && (
+              <p className="text-[10px] text-muted-foreground">
+                {quantity}x R$ {price.toFixed(2)}
+              </p>
+            )}
+          </div>
+        )}
+
+        {/* Controles de Quantidade */}
+        {!readonly && (
+          <div className="flex items-center bg-secondary/30 rounded-lg border border-border/50 h-8">
+            <button
+              onClick={() => quantity > 1 && onUpdateQuantity(id, quantity - 1)}
+              disabled={quantity <= 1}
+              className="w-7 h-full flex items-center justify-center text-muted-foreground hover:text-foreground disabled:opacity-30 active:scale-90 transition-all"
+            >
+              <Minus className="w-3 h-3" />
+            </button>
+            <span className="w-6 text-center text-xs font-semibold tabular-nums">
+              {quantity}
+            </span>
+            <button
+              onClick={() => onUpdateQuantity(id, quantity + 1)}
+              className="w-7 h-full flex items-center justify-center text-muted-foreground hover:text-foreground active:scale-90 transition-all"
+            >
+              <Plus className="w-3 h-3" />
+            </button>
+          </div>
+        )}
+
+        {/* Quantidade (Modo Leitura) */}
+        {readonly && !showPriceInput && !price && (
+          <span className="text-xs font-medium bg-secondary px-2 py-1 rounded-md text-muted-foreground">
+            {quantity}un
+          </span>
+        )}
+
+        {/* Botão Excluir */}
+        {!readonly && (
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => onRemove(id)}
+            className="h-8 w-8 text-muted-foreground/50 hover:text-destructive hover:bg-destructive/10 -mr-1"
+          >
+            <Trash2 className="w-4 h-4" />
+          </Button>
+        )}
       </div>
     </div>
   );
-});
+}
