@@ -89,6 +89,8 @@ export default function ListDetail() {
   const { toast } = useToast();
 
   const preselectedMarketId = searchParams.get("marketId");
+
+  // Flag crucial: indica se devemos forçar o uso de preços (vindo do Comparar)
   const usePrices = searchParams.get("usePrices") === "true";
 
   const [list, setList] = useState<ShoppingList | null>(null);
@@ -135,7 +137,7 @@ export default function ListDetail() {
         await Promise.all([fetchListData(), fetchProducts()]);
 
         if (routeMarketId) {
-          // Modo "apenas visualização de preços"
+          // Modo "apenas visualização de preços" vindo do Comparar
           await loadMarketData(routeMarketId, false, true);
         }
 
@@ -150,13 +152,12 @@ export default function ListDetail() {
           'postgres_changes',
           { event: '*', schema: 'public', table: 'market_prices' },
           (payload) => {
-            // Determina o ID do mercado que está sendo visualizado no momento
             const currentMarketId = routeMarketId || list?.market_id || selectedMarket?.id;
 
-            // Se houver uma atualização de preço para o mercado que estou vendo
-            if (currentMarketId && payload.new && (payload.new as any).market_id === currentMarketId) {
+            // Só atualiza em tempo real se estivermos no MODO COMPARAÇÃO.
+            // Se for compra orgânica, ignoramos atualizações externas para não preencher a tela do usuário.
+            if (isCompareMode && currentMarketId && payload.new && (payload.new as any).market_id === currentMarketId) {
               console.log("Preço atualizado externamente. Recarregando...");
-              // Recarrega os preços sem alterar o modo da tela
               loadMarketData(currentMarketId, isShoppingMode, true);
             }
           }
@@ -206,13 +207,17 @@ export default function ListDetail() {
       if (itemsError) throw itemsError;
       setItems(itemsData as ListItem[]);
 
-      // Recupera estado de compras anterior se existir e não estivermos em modo comparação
+      // Lógica de recuperação de estado
       if (listData.market_id && !routeMarketId) {
         if (listData.status === 'closed') {
           await loadMarketData(listData.market_id, false, true);
         } else if (listData.status === 'shopping') {
-          // Importante: Passar TRUE no último parâmetro para recuperar os preços ao recarregar a página
-          await loadMarketData(listData.market_id, true, true);
+          // AQUI ESTÁ A CORREÇÃO PRINCIPAL:
+          // Carrega preços se:
+          // 1. isCompareMode = true (estamos vendo a comparação)
+          // 2. OR usePrices = true (acabamos de vir da comparação clicando em "Usar Lista")
+          const shouldLoadPrices = isCompareMode || usePrices;
+          await loadMarketData(listData.market_id, true, shouldLoadPrices);
         }
       }
 
@@ -287,6 +292,8 @@ export default function ListDetail() {
           }
         }
       } else {
+        // Se a instrução é NÃO buscar preços (false), limpamos o objeto
+        // Isso garante que compra orgânica comece zerada
         setItemPrices({});
       }
 
@@ -493,6 +500,9 @@ export default function ListDetail() {
     }
   };
 
+  // ------------------------------------------------------------------
+  // INICIAR COMPRAS (Ponto crítico da correção)
+  // ------------------------------------------------------------------
   const startShopping = async () => {
     if (!selectedMarket || !id) {
       toast({
@@ -519,8 +529,16 @@ export default function ListDetail() {
 
       setIsShoppingMode(true);
 
-      // Carrega dados e força o fetch de preços (último param = true)
-      loadMarketData(selectedMarket.id, true, true);
+      // Se veio do Comparar (isCompareMode = true), shouldLoadPrices = true.
+      // Se é Orgânico (isCompareMode = false), shouldLoadPrices = false.
+      const shouldLoadPrices = isCompareMode;
+
+      await loadMarketData(selectedMarket.id, true, shouldLoadPrices);
+
+      // Garante limpeza se for orgânico
+      if (!shouldLoadPrices) {
+        setItemPrices({});
+      }
 
       items.forEach((item) => {
         if (item.is_checked) {
@@ -529,8 +547,9 @@ export default function ListDetail() {
       });
 
       // Se estava no modo comparar, volta para a rota padrão da lista
+      // E passa a flag usePrices=true para o fetchListData saber que deve carregar os preços
       if (isCompareMode) {
-        navigate(`/lista/${id}`);
+        navigate(`/lista/${id}?usePrices=true`);
       }
 
     } catch (error) {
