@@ -714,25 +714,27 @@ export default function ListDetail() {
     <div className="min-h-screen bg-background pb-8">
       {/* Header Atualizado com Menu Lateral e Lógica de Status */}
       <header className="sticky top-0 z-40 bg-background/90 backdrop-blur-lg border-b border-border transition-all">
-        <div className="flex items-center gap-2 px-4 py-4 max-w-md mx-auto">
+        <div className="flex items-center gap-2 px-4 py-3 max-w-md mx-auto">
           <Button
             variant="ghost"
             size="icon"
             onClick={() => isCompareMode ? navigate(-1) : navigate("/")}
-            className="h-10 w-10 -ml-2"
+            className="h-10 w-10 -ml-2 shrink-0"
           >
             <ArrowLeft className="w-5 h-5" />
           </Button>
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2">
-              <h1 className="text-lg font-display font-bold text-foreground truncate">{list.name}</h1>
-              {isClosed && <Lock className="w-3 h-3 text-muted-foreground" />}
+
+          <div className="flex-1 min-w-0 flex flex-col justify-center h-10">
+            <div className="flex items-center gap-1.5">
+              <h1 className="text-base font-display font-bold text-foreground truncate">{list.name}</h1>
+              {isClosed && <Lock className="w-3 h-3 text-muted-foreground shrink-0" />}
             </div>
-            <p className="text-sm text-muted-foreground truncate">
+
+            <p className="text-xs text-muted-foreground truncate leading-none mt-0.5">
               {isClosed
-                ? (totalPrice > 0 ? `Total final: R$ ${totalPrice.toFixed(2)}` : "Lista Fechada")
+                ? (totalPrice > 0 ? `Total: R$ ${totalPrice.toFixed(2)}` : "Fechada")
                 : isShoppingMode
-                  ? `${checkedCount}/${items.length} itens • R$ ${totalPrice.toFixed(2)}`
+                  ? `${checkedCount}/${items.length} • R$ ${totalPrice.toFixed(2)}`
                   : isCompareMode
                     ? `Simulação • R$ ${totalPrice.toFixed(2)}`
                     : `${items.length} ${items.length === 1 ? "item" : "itens"}`
@@ -740,22 +742,22 @@ export default function ListDetail() {
             </p>
           </div>
 
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-1 shrink-0">
             {!isShoppingMode && !isClosed && !isCompareMode && (
               <Button
                 onClick={() => setAddDialogOpen(true)}
                 size="icon"
                 variant="secondary"
-                className="h-10 w-10 rounded-xl text-primary"
+                className="h-9 w-9 rounded-xl text-primary"
               >
-                <Plus className="w-6 h-6" />
+                <Plus className="w-5 h-5" />
               </Button>
             )}
 
             {!isCompareMode && (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <Button variant="ghost" size="icon" className="h-10 w-10">
+                  <Button variant="ghost" size="icon" className="h-9 w-9">
                     <MoreVertical className="w-5 h-5 text-muted-foreground" />
                   </Button>
                 </DropdownMenuTrigger>
@@ -776,27 +778,29 @@ export default function ListDetail() {
               </DropdownMenu>
             )}
 
+            {/* Botão do Menu Principal do App */}
             <AppMenu />
           </div>
         </div>
 
+        {/* Banner informativo quando em modo comparação ou compras */}
         {(isShoppingMode || isCompareMode || (isClosed && selectedMarket)) && selectedMarket && (
           <div className="px-4 pb-3 max-w-md mx-auto">
             <div className={cn(
-              "flex items-center gap-2 p-2 rounded-lg text-sm border",
+              "flex items-center gap-2 p-2 rounded-lg text-xs sm:text-sm border",
               isClosed
                 ? "bg-muted text-muted-foreground border-border"
                 : isCompareMode
                   ? "bg-secondary text-secondary-foreground border-secondary"
                   : "bg-primary/10 text-primary border-primary/20"
             )}>
-              <Store className="w-4 h-4" />
+              <Store className="w-3.5 h-3.5 shrink-0" />
               <span className="font-medium truncate">
                 {isClosed
-                  ? `Comprado em: ${selectedMarket.name}`
+                  ? `Comprado: ${selectedMarket.name}`
                   : isCompareMode
-                    ? `Vendo preços de: ${selectedMarket.name}`
-                    : `Comprando em: ${selectedMarket.name}`
+                    ? `Preços: ${selectedMarket.name}`
+                    : `No mercado: ${selectedMarket.name}`
                 }
               </span>
             </div>
@@ -939,7 +943,7 @@ export default function ListDetail() {
         </div>
       )}
 
-      {/* Dialogs */}
+      {/* Dialog: Editar Nome */}
       <Dialog open={editNameDialogOpen} onOpenChange={setEditNameDialogOpen}>
         <DialogContent className="w-[90%] max-w-sm mx-auto rounded-2xl p-6">
           <DialogHeader>
@@ -964,6 +968,7 @@ export default function ListDetail() {
         </DialogContent>
       </Dialog>
 
+      {/* Dialog: Excluir Lista */}
       <AlertDialog open={deleteListDialogOpen} onOpenChange={setDeleteListDialogOpen}>
         <AlertDialogContent className="w-[90%] max-w-sm mx-auto rounded-2xl p-6">
           <AlertDialogHeader>
@@ -985,6 +990,7 @@ export default function ListDetail() {
         </AlertDialogContent>
       </AlertDialog>
 
+      {/* Dialog: Duplicar Lista */}
       <Dialog open={duplicateDialogOpen} onOpenChange={setDuplicateDialogOpen}>
         <DialogContent className="w-[90%] max-w-sm mx-auto rounded-2xl p-6">
           <DialogHeader>
@@ -1012,6 +1018,7 @@ export default function ListDetail() {
         </DialogContent>
       </Dialog>
 
+      {/* Dialog: Adicionar Produtos */}
       <Dialog open={addDialogOpen} onOpenChange={closeAddDialog}>
         <DialogContent className="w-[95%] max-w-sm mx-auto rounded-2xl h-[85vh] p-0 gap-0 overflow-hidden flex flex-col">
           <DialogHeader className="p-4 pb-2 border-b border-border/50 bg-background z-10">
@@ -1111,6 +1118,7 @@ export default function ListDetail() {
         </DialogContent>
       </Dialog>
 
+      {/* Dialog: Finalizar Compras */}
       <AlertDialog open={finishDialogOpen} onOpenChange={setFinishDialogOpen}>
         <AlertDialogContent className="w-[90%] max-w-sm mx-auto rounded-2xl p-6">
           <AlertDialogHeader>
