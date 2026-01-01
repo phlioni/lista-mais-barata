@@ -32,7 +32,7 @@ interface MarketPrice {
   market_id: string;
   product_id: string;
   price: number;
-  created_at: string; // Garantindo que temos o campo de data
+  created_at: string;
 }
 
 interface MarketResult {
@@ -46,7 +46,7 @@ interface MarketResult {
   coveragePercent: number;
   realCost: number;
   isRecommended: boolean;
-  lastUpdate: string; // Novo campo para a data
+  lastUpdate: string;
 }
 
 function calculateDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
@@ -218,7 +218,6 @@ export default function Compare() {
         let totalPrice = 0;
         let missingItems = 0;
 
-        // Array para coletar as datas dos preços encontrados neste mercado
         const foundPriceDates: string[] = [];
 
         items.forEach((item) => {
@@ -234,10 +233,8 @@ export default function Compare() {
           }
         });
 
-        // Encontra a data mais recente entre os preços
-        let lastUpdate = new Date().toISOString(); // Default fallback
+        let lastUpdate = new Date().toISOString();
         if (foundPriceDates.length > 0) {
-          // Ordena descrescente e pega a primeira (mais recente)
           foundPriceDates.sort((a, b) => new Date(b).getTime() - new Date(a).getTime());
           lastUpdate = foundPriceDates[0];
         }
@@ -257,7 +254,7 @@ export default function Compare() {
           coveragePercent,
           realCost,
           isRecommended: false,
-          lastUpdate, // Passando a data calculada
+          lastUpdate,
         };
       });
 
