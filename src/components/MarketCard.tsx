@@ -1,7 +1,7 @@
-import { MapPin, Navigation, ShoppingCart, Star, AlertCircle, Clock } from "lucide-react";
-import { Link } from "react-router-dom";
+import { MapPin, Navigation, Star, AlertCircle, Clock } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { useNavigate } from "react-router-dom";
 
 interface MarketCardProps {
   id: string;
@@ -28,6 +28,12 @@ export function MarketCard({
   isRecommended,
   lastUpdate
 }: MarketCardProps) {
+  const navigate = useNavigate();
+
+  // Função para navegar usando a rota que funciona no seu projeto
+  const handleViewDetails = () => {
+    navigate(`/mercado/${id}/${listId}?distance=${distance}&total=${totalPrice}`);
+  };
 
   // Formata a data para dd/mm/aaaa
   const formattedDate = new Date(lastUpdate).toLocaleDateString("pt-BR", {
@@ -108,10 +114,13 @@ export function MarketCard({
             <span>Atualizado em {formattedDate}</span>
           </div>
 
-          <Button asChild size="sm" className="h-9 px-4 rounded-xl font-medium">
-            <Link to={`/market/${id}?listId=${listId}`}>
-              Ver Detalhes
-            </Link>
+          {/* Botão usando onClick para garantir a navegação correta */}
+          <Button
+            onClick={handleViewDetails}
+            size="sm"
+            className="h-9 px-4 rounded-xl font-medium"
+          >
+            Ver Detalhes
           </Button>
         </div>
       </div>
