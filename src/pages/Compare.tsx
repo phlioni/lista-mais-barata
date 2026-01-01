@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { ArrowLeft, MapPin, Loader2, Sparkles } from "lucide-react"; // Removido Search não utilizado
+import { ArrowLeft, MapPin, Loader2, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { RadiusSelector } from "@/components/RadiusSelector";
 import { MarketCard } from "@/components/MarketCard";
@@ -32,6 +32,7 @@ interface MarketPrice {
   market_id: string;
   product_id: string;
   price: number;
+  created_at: string; // Garantindo que temos o campo de data
 }
 
 interface MarketResult {
@@ -45,9 +46,9 @@ interface MarketResult {
   coveragePercent: number;
   realCost: number;
   isRecommended: boolean;
+  lastUpdate: string; // Novo campo para a data
 }
 
-// Fórmula de Haversine para calcular distância
 function calculateDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
   const R = 6371;
   const dLat = (lat2 - lat1) * Math.PI / 180;
@@ -95,7 +96,6 @@ export default function Compare() {
           });
         },
         () => {
-          // Fallback SP
           setUserLocation({ lat: -23.5505, lng: -46.6333 });
         }
       );
@@ -104,11 +104,9 @@ export default function Compare() {
     }
   }, []);
 
-  // --- NOVO: Atualização em Tempo Real ---
   useEffect(() => {
     if (!hasSearched) return;
 
-    // Escuta mudanças na tabela de preços
     const channel = supabase
       .channel('compare-realtime')
       .on(
@@ -116,7 +114,6 @@ export default function Compare() {
         { event: '*', schema: 'public', table: 'market_prices' },
         (payload) => {
           console.log("Preço alterado externamente, recalculando...", payload);
-          // Recalcula a comparação silenciosamente (sem loading spinner agressivo)
           compareMarkets(true);
         }
       )
@@ -126,7 +123,6 @@ export default function Compare() {
       supabase.removeChannel(channel);
     };
   }, [hasSearched, id, userLocation, radius]);
-  // ---------------------------------------
 
   const fetchListName = async () => {
     if (!id) return;
@@ -145,7 +141,6 @@ export default function Compare() {
     }
   };
 
-  // Adicionei o parâmetro silent para atualizações em tempo real não piscarem a tela
   const compareMarkets = async (silent = false) => {
     if (!id || !userLocation) return;
 
@@ -153,7 +148,6 @@ export default function Compare() {
     setHasSearched(true);
 
     try {
-      // 1. Busca itens da lista
       const { data: itemsData, error: itemsError } = await supabase
         .from("list_items")
         .select(`
@@ -179,14 +173,12 @@ export default function Compare() {
         return;
       }
 
-      // 2. Busca todos os mercados
       const { data: marketsData, error: marketsError } = await supabase
         .from("markets")
         .select("*");
 
       if (marketsError) throw marketsError;
 
-      // 3. Filtra pelo raio (Cálculo Local)
       const marketsInRadius = (marketsData as Market[]).filter((market) => {
         const distance = calculateDistance(
           userLocation.lat,
@@ -203,7 +195,6 @@ export default function Compare() {
         return;
       }
 
-      // 4. Busca preços para esses mercados e produtos
       const productIds = items.map((item) => item.product_id);
       const marketIds = marketsInRadius.map((market) => market.id);
 
@@ -216,7 +207,6 @@ export default function Compare() {
       if (pricesError) throw pricesError;
       const prices = pricesData as MarketPrice[];
 
-      // 5. Calcula totais (Cálculo Local)
       const marketResults: MarketResult[] = marketsInRadius.map((market) => {
         const distance = calculateDistance(
           userLocation.lat,
@@ -228,6 +218,9 @@ export default function Compare() {
         let totalPrice = 0;
         let missingItems = 0;
 
+        // Array para coletar as datas dos preços encontrados neste mercado
+        const foundPriceDates: string[] = [];
+
         items.forEach((item) => {
           const priceEntry = prices.find(
             (p) => p.market_id === market.id && p.product_id === item.product_id
@@ -235,13 +228,22 @@ export default function Compare() {
 
           if (priceEntry) {
             totalPrice += priceEntry.price * item.quantity;
+            foundPriceDates.push(priceEntry.created_at);
           } else {
             missingItems++;
           }
         });
 
+        // Encontra a data mais recente entre os preços
+        let lastUpdate = new Date().toISOString(); // Default fallback
+        if (foundPriceDates.length > 0) {
+          // Ordena descrescente e pega a primeira (mais recente)
+          foundPriceDates.sort((a, b) => new Date(b).getTime() - new Date(a).getTime());
+          lastUpdate = foundPriceDates[0];
+        }
+
         const coveragePercent = Math.round(((items.length - missingItems) / items.length) * 100);
-        const travelCost = distance * 2 * 1.5; // ida e volta, R$ 1,50/km
+        const travelCost = distance * 2 * 1.5;
         const realCost = totalPrice + travelCost;
 
         return {
@@ -255,10 +257,10 @@ export default function Compare() {
           coveragePercent,
           realCost,
           isRecommended: false,
+          lastUpdate, // Passando a data calculada
         };
       });
 
-      // Filtra e ordena
       const viableMarkets = marketResults.filter(
         (m) => m.totalPrice > 0 && m.coveragePercent >= 30
       );
@@ -269,7 +271,6 @@ export default function Compare() {
         return a.realCost - b.realCost;
       });
 
-      // Marca recomendação
       if (viableMarkets.length > 0) {
         let recommendedIndex = 0;
         const completeMarkets = viableMarkets.filter(m => m.missingItems === 0);
@@ -277,7 +278,6 @@ export default function Compare() {
         if (completeMarkets.length > 0) {
           const bestComplete = completeMarkets[0];
           const priceDiff = viableMarkets[0].realCost - bestComplete.realCost;
-          // Se o completo custa menos que 20% a mais que o incompleto mais barato, recomenda o completo
           if (priceDiff < 0 || (viableMarkets[0].missingItems > 0 && priceDiff / viableMarkets[0].realCost < 0.2)) {
             recommendedIndex = viableMarkets.findIndex(m => m.id === bestComplete.id);
           }
@@ -312,14 +312,13 @@ export default function Compare() {
 
   return (
     <div className="min-h-screen bg-background pb-8">
-      {/* Header */}
       <header className="sticky top-0 z-40 bg-background/80 backdrop-blur-lg border-b border-border">
         <div className="flex items-center justify-between px-4 py-4 max-w-md mx-auto">
           <div className="flex items-center gap-3">
             <Button
               variant="ghost"
               size="icon"
-              onClick={() => navigate(`/lista/${id}`)} // Corrigido o link de voltar
+              onClick={() => navigate(`/lista/${id}`)}
             >
               <ArrowLeft className="w-5 h-5" />
             </Button>
@@ -333,7 +332,6 @@ export default function Compare() {
       </header>
 
       <main className="px-4 py-4 max-w-md mx-auto">
-        {/* Location Status */}
         <div className="flex items-center gap-2 text-sm text-muted-foreground mb-4">
           <MapPin className="w-4 h-4" />
           <span>
@@ -343,13 +341,11 @@ export default function Compare() {
           </span>
         </div>
 
-        {/* Radius Selector */}
         <div className="mb-6">
           <p className="text-sm font-medium text-foreground mb-2">Raio de Busca:</p>
           <RadiusSelector value={radius} onChange={setRadius} />
         </div>
 
-        {/* Search Button */}
         <Button
           onClick={() => compareMarkets(false)}
           className="w-full h-14 mb-6"
@@ -366,7 +362,6 @@ export default function Compare() {
           )}
         </Button>
 
-        {/* Results */}
         {hasSearched && !loading && (
           <>
             {results.length === 0 ? (
@@ -392,6 +387,7 @@ export default function Compare() {
                     missingItems={result.missingItems}
                     rank={index + 1}
                     isRecommended={result.isRecommended}
+                    lastUpdate={result.lastUpdate}
                   />
                 ))}
               </div>
