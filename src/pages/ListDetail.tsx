@@ -137,7 +137,6 @@ export default function ListDetail() {
         await Promise.all([fetchListData(), fetchProducts()]);
 
         if (routeMarketId) {
-          // Modo "apenas visualização de preços" vindo do Comparar
           await loadMarketData(routeMarketId, false, true);
         }
 
@@ -145,7 +144,6 @@ export default function ListDetail() {
       };
       init();
 
-      // Configuração do Supabase Realtime
       const channel = supabase
         .channel('list-detail-prices')
         .on(
@@ -154,8 +152,6 @@ export default function ListDetail() {
           (payload) => {
             const currentMarketId = routeMarketId || list?.market_id || selectedMarket?.id;
 
-            // Só atualiza em tempo real se estivermos no MODO COMPARAÇÃO.
-            // Se for compra orgânica, ignoramos atualizações externas para não preencher a tela do usuário.
             if (isCompareMode && currentMarketId && payload.new && (payload.new as any).market_id === currentMarketId) {
               console.log("Preço atualizado externamente. Recarregando...");
               loadMarketData(currentMarketId, isShoppingMode, true);
@@ -170,7 +166,6 @@ export default function ListDetail() {
     }
   }, [user, id, routeMarketId, isShoppingMode, list?.market_id, selectedMarket?.id]);
 
-  // Backward compatibility para query params
   useEffect(() => {
     if (preselectedMarketId && usePrices && list && list.status === 'open' && !routeMarketId) {
       loadMarketData(preselectedMarketId, true, true);
@@ -207,15 +202,10 @@ export default function ListDetail() {
       if (itemsError) throw itemsError;
       setItems(itemsData as ListItem[]);
 
-      // Lógica de recuperação de estado
       if (listData.market_id && !routeMarketId) {
         if (listData.status === 'closed') {
           await loadMarketData(listData.market_id, false, true);
         } else if (listData.status === 'shopping') {
-          // AQUI ESTÁ A CORREÇÃO PRINCIPAL:
-          // Carrega preços se:
-          // 1. isCompareMode = true (estamos vendo a comparação)
-          // 2. OR usePrices = true (acabamos de vir da comparação clicando em "Usar Lista")
           const shouldLoadPrices = isCompareMode || usePrices;
           await loadMarketData(listData.market_id, true, shouldLoadPrices);
         }
@@ -292,8 +282,6 @@ export default function ListDetail() {
           }
         }
       } else {
-        // Se a instrução é NÃO buscar preços (false), limpamos o objeto
-        // Isso garante que compra orgânica comece zerada
         setItemPrices({});
       }
 
@@ -500,9 +488,6 @@ export default function ListDetail() {
     }
   };
 
-  // ------------------------------------------------------------------
-  // INICIAR COMPRAS (Ponto crítico da correção)
-  // ------------------------------------------------------------------
   const startShopping = async () => {
     if (!selectedMarket || !id) {
       toast({
@@ -529,13 +514,9 @@ export default function ListDetail() {
 
       setIsShoppingMode(true);
 
-      // Se veio do Comparar (isCompareMode = true), shouldLoadPrices = true.
-      // Se é Orgânico (isCompareMode = false), shouldLoadPrices = false.
       const shouldLoadPrices = isCompareMode;
-
       await loadMarketData(selectedMarket.id, true, shouldLoadPrices);
 
-      // Garante limpeza se for orgânico
       if (!shouldLoadPrices) {
         setItemPrices({});
       }
@@ -546,8 +527,6 @@ export default function ListDetail() {
         }
       });
 
-      // Se estava no modo comparar, volta para a rota padrão da lista
-      // E passa a flag usePrices=true para o fetchListData saber que deve carregar os preços
       if (isCompareMode) {
         navigate(`/lista/${id}?usePrices=true`);
       }
@@ -609,7 +588,10 @@ export default function ListDetail() {
         price: itemPrices[item.id],
       }));
 
-      for (const record of priceRecords) {
+      // MELHORIA DE PERFORMANCE: Promise.all para salvar tudo em paralelo
+      // Em vez de esperar um salvar para começar o próximo, salvamos todos ao mesmo tempo.
+      await Promise.all(priceRecords.map(async (record) => {
+        // Verifica se já existe preço para este produto neste mercado
         const { data: existing } = await supabase
           .from("market_prices")
           .select("id")
@@ -618,17 +600,20 @@ export default function ListDetail() {
           .maybeSingle();
 
         if (existing) {
-          await supabase
+          // Atualiza
+          return supabase
             .from("market_prices")
             .update({ price: record.price, created_at: new Date().toISOString() })
             .eq("id", existing.id);
         } else {
-          await supabase
+          // Insere
+          return supabase
             .from("market_prices")
             .insert(record);
         }
-      }
+      }));
 
+      // Atualiza o status da lista
       await supabase
         .from("shopping_lists")
         .update({
@@ -731,7 +716,6 @@ export default function ListDetail() {
 
   return (
     <div className="min-h-screen bg-background pb-8">
-      {/* Header Atualizado com Menu Lateral e Lógica de Status */}
       <header className="sticky top-0 z-40 bg-background/90 backdrop-blur-lg border-b border-border transition-all">
         <div className="flex items-center gap-2 px-4 py-3 max-w-md mx-auto">
           <Button
@@ -797,12 +781,10 @@ export default function ListDetail() {
               </DropdownMenu>
             )}
 
-            {/* Botão do Menu Principal do App */}
             <AppMenu />
           </div>
         </div>
 
-        {/* Banner informativo quando em modo comparação ou compras */}
         {(isShoppingMode || isCompareMode || (isClosed && selectedMarket)) && selectedMarket && (
           <div className="px-4 pb-3 max-w-md mx-auto">
             <div className={cn(
@@ -827,7 +809,6 @@ export default function ListDetail() {
         )}
       </header>
 
-      {/* Items */}
       <main className="px-4 py-4 max-w-md mx-auto">
         {!isShoppingMode && !isClosed && !isCompareMode && items.length > 0 && (
           <div className="mb-6 animate-fade-in">
@@ -876,7 +857,6 @@ export default function ListDetail() {
         )}
       </main>
 
-      {/* Bottom Actions */}
       {items.length > 0 && (
         <div className="fixed bottom-0 left-0 right-0 p-4 bg-background/80 backdrop-blur-xl border-t border-border z-30 safe-bottom">
           <div className="max-w-md mx-auto space-y-3">
@@ -962,7 +942,6 @@ export default function ListDetail() {
         </div>
       )}
 
-      {/* Dialog: Editar Nome */}
       <Dialog open={editNameDialogOpen} onOpenChange={setEditNameDialogOpen}>
         <DialogContent className="w-[90%] max-w-sm mx-auto rounded-2xl p-6">
           <DialogHeader>
@@ -987,7 +966,6 @@ export default function ListDetail() {
         </DialogContent>
       </Dialog>
 
-      {/* Dialog: Excluir Lista */}
       <AlertDialog open={deleteListDialogOpen} onOpenChange={setDeleteListDialogOpen}>
         <AlertDialogContent className="w-[90%] max-w-sm mx-auto rounded-2xl p-6">
           <AlertDialogHeader>
@@ -1009,7 +987,6 @@ export default function ListDetail() {
         </AlertDialogContent>
       </AlertDialog>
 
-      {/* Dialog: Duplicar Lista */}
       <Dialog open={duplicateDialogOpen} onOpenChange={setDuplicateDialogOpen}>
         <DialogContent className="w-[90%] max-w-sm mx-auto rounded-2xl p-6">
           <DialogHeader>
@@ -1037,7 +1014,6 @@ export default function ListDetail() {
         </DialogContent>
       </Dialog>
 
-      {/* Dialog: Adicionar Produtos */}
       <Dialog open={addDialogOpen} onOpenChange={closeAddDialog}>
         <DialogContent className="w-[95%] max-w-sm mx-auto rounded-2xl h-[85vh] p-0 gap-0 overflow-hidden flex flex-col">
           <DialogHeader className="p-4 pb-2 border-b border-border/50 bg-background z-10">
@@ -1137,7 +1113,6 @@ export default function ListDetail() {
         </DialogContent>
       </Dialog>
 
-      {/* Dialog: Finalizar Compras */}
       <AlertDialog open={finishDialogOpen} onOpenChange={setFinishDialogOpen}>
         <AlertDialogContent className="w-[90%] max-w-sm mx-auto rounded-2xl p-6">
           <AlertDialogHeader>
@@ -1153,7 +1128,12 @@ export default function ListDetail() {
           <AlertDialogFooter className="flex-row gap-3 space-x-0 mt-4">
             <AlertDialogCancel disabled={saving} className="flex-1 h-12 rounded-xl mt-0">Voltar</AlertDialogCancel>
             <AlertDialogAction onClick={finishShopping} disabled={saving} className="flex-1 h-12 rounded-xl">
-              {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : "Finalizar e Fechar"}
+              {saving ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin mr-2" />
+                  Salvando...
+                </>
+              ) : "Finalizar e Fechar"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
