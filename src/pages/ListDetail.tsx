@@ -514,7 +514,7 @@ export default function ListDetail() {
           products: { ...item.products, name: correctedName, brand: correctedBrand }
         } : item));
 
-        toast({ title: "Produto atualizado", description: "Alteração refletida para todos os usuários." });
+        toast({ title: "Produto atualizado", description: "Obrigado pela contribuição!" });
       }
 
       // Reset
