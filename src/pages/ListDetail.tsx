@@ -3,7 +3,7 @@ import { useParams, useNavigate, useSearchParams } from "react-router-dom";
 import {
   ArrowLeft, Plus, Search, Scale, Loader2, X, ShoppingCart,
   Check, Store, Copy, Lock, MoreVertical, Pencil, Trash2,
-  AlertTriangle, Save // Adicionados ícones
+  AlertTriangle, Save
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -37,7 +37,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Label } from "@/components/ui/label"; // Adicionado Label
+import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
 
 interface Product {
@@ -356,10 +356,19 @@ export default function ListDetail() {
     }
   };
 
-  const toggleProductSelection = (productId: string) => {
-    const existingItem = items.find((item) => item.product_id === productId);
-    if (existingItem) return;
+  // --- SELEÇÃO / REMOÇÃO DE PRODUTOS ---
 
+  const toggleProductSelection = (productId: string) => {
+    // Verifica se já está na lista principal (Items)
+    const existingItem = items.find((item) => item.product_id === productId);
+
+    if (existingItem) {
+      // Se já existe, o usuário quer REMOVER da lista
+      removeItem(existingItem.id);
+      return;
+    }
+
+    // Se não está na lista principal, gerencia a seleção temporária para adição em massa
     setSelectedProducts((prev) => {
       const newSet = new Set(prev);
       if (newSet.has(productId)) {
@@ -423,7 +432,7 @@ export default function ListDetail() {
     setAddDialogOpen(open);
   };
 
-  // --- NOVA LÓGICA DE CRIAÇÃO/EDIÇÃO DE PRODUTOS ---
+  // --- LÓGICA DE CRIAÇÃO/EDIÇÃO DE PRODUTOS ---
 
   const handleCreateOrUpdateProduct = async () => {
     if (!editingProductData.name.trim()) return;
@@ -1135,7 +1144,7 @@ export default function ListDetail() {
         </DialogContent>
       </Dialog>
 
-      {/* --- DIALOG DE ADICIONAR / CRIAR PRODUTOS (Alterado para incluir criação) --- */}
+      {/* --- DIALOG DE ADICIONAR / CRIAR PRODUTOS --- */}
       <Dialog open={addDialogOpen} onOpenChange={closeAddDialog}>
         <DialogContent className="w-[95%] max-w-sm mx-auto rounded-2xl h-[85vh] p-0 gap-0 overflow-hidden flex flex-col">
           {isProductMode ? (
@@ -1228,8 +1237,13 @@ export default function ListDetail() {
                 {filteredProducts.length === 0 && searchQuery.length > 0 ? (
                   <div className="py-8 text-center space-y-3">
                     <p className="text-muted-foreground">Produto não encontrado.</p>
-                    <Button variant="outline" onClick={startCreateProduct} className="rounded-xl border-dashed">
-                      <Plus className="w-4 h-4 mr-2" /> Criar "{searchQuery}"
+                    {/* Botão de CRIAR mais evidente */}
+                    <Button
+                      variant="secondary"
+                      onClick={startCreateProduct}
+                      className="rounded-xl border border-dashed border-primary/50 bg-primary/5 hover:bg-primary/10 text-primary w-full h-12"
+                    >
+                      <Plus className="w-5 h-5 mr-2" /> Criar "{searchQuery}"
                     </Button>
                   </div>
                 ) : filteredProducts.length === 0 ? (
@@ -1243,54 +1257,52 @@ export default function ListDetail() {
                   filteredProducts.map((product) => {
                     const isInList = items.some((item) => item.product_id === product.id);
                     const isSelected = selectedProducts.has(product.id);
+
                     return (
-                      <div key={product.id} className="flex items-center gap-2 group">
+                      <div key={product.id} className={cn(
+                        "relative w-full rounded-xl border transition-all duration-200 flex items-center group",
+                        isInList
+                          ? "bg-muted/30 border-muted-foreground/20" // Estilo discreto para itens na lista
+                          : isSelected
+                            ? "bg-primary/10 border-primary ring-1 ring-primary" // Estilo selecionado
+                            : "bg-card border-border hover:border-primary/50" // Estilo padrão
+                      )}>
+                        {/* Área de Clique Principal (Selecionar/Remover) */}
                         <button
                           onClick={() => toggleProductSelection(product.id)}
-                          disabled={isInList}
-                          className={cn(
-                            "flex-1 p-4 text-left rounded-xl transition-all duration-200 flex items-center gap-3 active:scale-[0.99]",
-                            isInList
-                              ? "opacity-60 cursor-not-allowed bg-muted/50"
-                              : isSelected
-                                ? "bg-primary/10 ring-2 ring-primary ring-inset"
-                                : "bg-card border border-border hover:border-primary/50"
-                          )}
+                          className="flex-1 p-4 flex items-center gap-3 text-left min-w-0"
                         >
                           <div className={cn(
                             "flex items-center justify-center w-6 h-6 rounded-full border-2 flex-shrink-0 transition-all",
                             isInList
-                              ? "border-muted-foreground/30 bg-muted-foreground/10"
+                              ? "border-muted-foreground bg-muted-foreground text-background"
                               : isSelected
-                                ? "border-primary bg-primary"
+                                ? "border-primary bg-primary text-primary-foreground"
                                 : "border-muted-foreground/30"
                           )}>
                             {(isInList || isSelected) && (
-                              <Check className={cn(
-                                "w-3.5 h-3.5",
-                                isInList ? "text-muted-foreground" : "text-primary-foreground"
-                              )} />
+                              <Check className="w-3.5 h-3.5" />
                             )}
                           </div>
                           <div className="flex-1 min-w-0">
                             <p className={cn(
                               "font-medium truncate text-base",
-                              isInList ? "text-muted-foreground" : "text-foreground"
+                              isInList ? "text-muted-foreground" : "text-foreground" // REMOVIDO line-through
                             )}>
                               {product.name}
                             </p>
                             <p className="text-sm text-muted-foreground truncate">
-                              {isInList ? "Já está na lista" : product.brand || "Sem marca"}
+                              {isInList ? "Toque para remover" : product.brand || "Sem marca"}
                             </p>
                           </div>
                         </button>
 
-                        {/* Botão de Editar Produto */}
+                        {/* Botão de Editar dentro do Card (Visível sempre) */}
                         <Button
                           variant="ghost"
                           size="icon"
                           onClick={(e) => startEditProduct(product, e)}
-                          className="h-10 w-10 text-muted-foreground hover:text-primary opacity-0 group-hover:opacity-100 transition-opacity"
+                          className="mr-2 h-10 w-10 text-muted-foreground hover:text-primary hover:bg-primary/5 transition-colors z-10 shrink-0"
                         >
                           <Pencil className="w-4 h-4" />
                         </Button>
