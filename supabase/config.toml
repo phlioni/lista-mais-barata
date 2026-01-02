@@ -2,3 +2,6 @@ project_id = "xsdlrfdffocwzukvckzx"
 
 [functions.smart-shopping-analysis]
 verify_jwt = false
+
+[functions.validate-product]
+verify_jwt = false

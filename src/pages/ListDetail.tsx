@@ -2,7 +2,8 @@ import { useState, useEffect } from "react";
 import { useParams, useNavigate, useSearchParams } from "react-router-dom";
 import {
   ArrowLeft, Plus, Search, Scale, Loader2, X, ShoppingCart,
-  Check, Store, Copy, Lock, MoreVertical, Pencil, Trash2
+  Check, Store, Copy, Lock, MoreVertical, Pencil, Trash2,
+  AlertTriangle, Save
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -36,6 +37,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
 
 interface Product {
@@ -112,6 +114,11 @@ export default function ListDetail() {
 
   const [selectedProducts, setSelectedProducts] = useState<Set<string>>(new Set());
   const [addingProducts, setAddingProducts] = useState(false);
+
+  // --- NOVOS STATES PARA CRIAÇÃO/EDIÇÃO DE PRODUTOS ---
+  const [isProductMode, setIsProductMode] = useState<'create' | 'edit' | null>(null);
+  const [editingProductData, setEditingProductData] = useState<{ id?: string, name: string, brand: string }>({ name: '', brand: '' });
+  const [validatingProduct, setValidatingProduct] = useState(false);
 
   // Shopping mode state
   const [isShoppingMode, setIsShoppingMode] = useState(false);
@@ -349,10 +356,19 @@ export default function ListDetail() {
     }
   };
 
-  const toggleProductSelection = (productId: string) => {
-    const existingItem = items.find((item) => item.product_id === productId);
-    if (existingItem) return;
+  // --- SELEÇÃO / REMOÇÃO DE PRODUTOS ---
 
+  const toggleProductSelection = (productId: string) => {
+    // Verifica se já está na lista principal (Items)
+    const existingItem = items.find((item) => item.product_id === productId);
+
+    if (existingItem) {
+      // Se já existe, o usuário quer REMOVER da lista
+      removeItem(existingItem.id);
+      return;
+    }
+
+    // Se não está na lista principal, gerencia a seleção temporária para adição em massa
     setSelectedProducts((prev) => {
       const newSet = new Set(prev);
       if (newSet.has(productId)) {
@@ -411,9 +427,124 @@ export default function ListDetail() {
     if (!open) {
       setSelectedProducts(new Set());
       setSearchQuery("");
+      setIsProductMode(null); // Resetar modo ao fechar
     }
     setAddDialogOpen(open);
   };
+
+  // --- LÓGICA DE CRIAÇÃO/EDIÇÃO DE PRODUTOS ---
+
+  const handleCreateOrUpdateProduct = async () => {
+    if (!editingProductData.name.trim()) return;
+
+    setValidatingProduct(true);
+    try {
+      // 1. Validar e corrigir com IA
+      const { data: validationData, error: validationError } = await supabase.functions.invoke('validate-product', {
+        body: { name: editingProductData.name, brand: editingProductData.brand }
+      });
+
+      if (validationError) throw validationError;
+
+      if (!validationData.isValid) {
+        toast({
+          title: "Produto inválido",
+          description: validationData.reason || "O produto não parece válido.",
+          variant: "destructive"
+        });
+        return;
+      }
+
+      const correctedName = validationData.correctedName;
+      const correctedBrand = validationData.correctedBrand || null;
+
+      // 2. Verificar Duplicidade
+      let duplicateQuery = supabase.from('products')
+        .select('*')
+        .ilike('name', correctedName);
+
+      if (correctedBrand) {
+        duplicateQuery = duplicateQuery.eq('brand', correctedBrand);
+      } else {
+        duplicateQuery = duplicateQuery.is('brand', null);
+      }
+
+      const { data: duplicates } = await duplicateQuery;
+
+      const isDuplicate = duplicates && duplicates.length > 0 &&
+        (isProductMode === 'create' || (isProductMode === 'edit' && duplicates[0].id !== editingProductData.id));
+
+      if (isDuplicate) {
+        toast({
+          title: "Produto já existe",
+          description: `O produto "${correctedName}" ${correctedBrand ? `(${correctedBrand})` : ''} já está cadastrado.`,
+          variant: "destructive"
+        });
+        return;
+      }
+
+      // 3. Salvar no Banco
+      if (isProductMode === 'create') {
+        const { data: newProduct, error: createError } = await supabase
+          .from('products')
+          .insert({ name: correctedName, brand: correctedBrand })
+          .select()
+          .single();
+
+        if (createError) throw createError;
+
+        setProducts(prev => [...prev, newProduct]);
+        toggleProductSelection(newProduct.id); // Seleciona automaticamente
+
+        toast({ title: "Produto criado", description: `${newProduct.name} foi adicionado.` });
+      } else if (isProductMode === 'edit' && editingProductData.id) {
+        const { error: updateError } = await supabase
+          .from('products')
+          .update({ name: correctedName, brand: correctedBrand })
+          .eq('id', editingProductData.id);
+
+        if (updateError) throw updateError;
+
+        // Atualiza lista local
+        setProducts(prev => prev.map(p => p.id === editingProductData.id ? { ...p, name: correctedName, brand: correctedBrand } : p));
+
+        // Atualiza itens da lista atual que usam esse produto
+        setItems(prev => prev.map(item => item.product_id === editingProductData.id ? {
+          ...item,
+          products: { ...item.products, name: correctedName, brand: correctedBrand }
+        } : item));
+
+        toast({ title: "Produto atualizado", description: "Alteração refletida para todos os usuários." });
+      }
+
+      // Reset
+      setIsProductMode(null);
+      setEditingProductData({ name: '', brand: '' });
+
+    } catch (error) {
+      console.error("Error saving product:", error);
+      toast({
+        title: "Erro ao salvar",
+        description: "Verifique sua conexão e tente novamente.",
+        variant: "destructive"
+      });
+    } finally {
+      setValidatingProduct(false);
+    }
+  };
+
+  const startCreateProduct = () => {
+    setIsProductMode('create');
+    setEditingProductData({ name: searchQuery, brand: '' });
+  };
+
+  const startEditProduct = (product: Product, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setIsProductMode('edit');
+    setEditingProductData({ id: product.id, name: product.name, brand: product.brand || '' });
+  };
+
+  // ----------------------------------------------------
 
   const toggleCheck = async (itemId: string) => {
     if (list?.status === 'closed' || isCompareMode) return;
@@ -588,10 +719,8 @@ export default function ListDetail() {
         price: itemPrices[item.id],
       }));
 
-      // MELHORIA DE PERFORMANCE: Promise.all para salvar tudo em paralelo
-      // Em vez de esperar um salvar para começar o próximo, salvamos todos ao mesmo tempo.
+      // MELHORIA DE PERFORMANCE: Promise.all
       await Promise.all(priceRecords.map(async (record) => {
-        // Verifica se já existe preço para este produto neste mercado
         const { data: existing } = await supabase
           .from("market_prices")
           .select("id")
@@ -600,20 +729,17 @@ export default function ListDetail() {
           .maybeSingle();
 
         if (existing) {
-          // Atualiza
           return supabase
             .from("market_prices")
             .update({ price: record.price, created_at: new Date().toISOString() })
             .eq("id", existing.id);
         } else {
-          // Insere
           return supabase
             .from("market_prices")
             .insert(record);
         }
       }));
 
-      // Atualiza o status da lista
       await supabase
         .from("shopping_lists")
         .update({
@@ -716,6 +842,7 @@ export default function ListDetail() {
 
   return (
     <div className="min-h-screen bg-background pb-8">
+      {/* Header (Mantido Original) */}
       <header className="sticky top-0 z-40 bg-background/90 backdrop-blur-lg border-b border-border transition-all">
         <div className="flex items-center gap-2 px-4 py-3 max-w-md mx-auto">
           <Button
@@ -809,6 +936,7 @@ export default function ListDetail() {
         )}
       </header>
 
+      {/* Main List (Mantido Original) */}
       <main className="px-4 py-4 max-w-md mx-auto">
         {!isShoppingMode && !isClosed && !isCompareMode && items.length > 0 && (
           <div className="mb-6 animate-fade-in">
@@ -857,6 +985,7 @@ export default function ListDetail() {
         )}
       </main>
 
+      {/* Footer Actions (Mantido Original) */}
       {items.length > 0 && (
         <div className="fixed bottom-0 left-0 right-0 p-4 bg-background/80 backdrop-blur-xl border-t border-border z-30 safe-bottom">
           <div className="max-w-md mx-auto space-y-3">
@@ -942,6 +1071,7 @@ export default function ListDetail() {
         </div>
       )}
 
+      {/* Dialogs Originais */}
       <Dialog open={editNameDialogOpen} onOpenChange={setEditNameDialogOpen}>
         <DialogContent className="w-[90%] max-w-sm mx-auto rounded-2xl p-6">
           <DialogHeader>
@@ -1014,102 +1144,184 @@ export default function ListDetail() {
         </DialogContent>
       </Dialog>
 
+      {/* --- DIALOG DE ADICIONAR / CRIAR PRODUTOS --- */}
       <Dialog open={addDialogOpen} onOpenChange={closeAddDialog}>
         <DialogContent className="w-[95%] max-w-sm mx-auto rounded-2xl h-[85vh] p-0 gap-0 overflow-hidden flex flex-col">
-          <DialogHeader className="p-4 pb-2 border-b border-border/50 bg-background z-10">
-            <DialogTitle className="font-display text-xl">
-              Adicionar Produtos
-              {selectedProducts.size > 0 && (
-                <span className="ml-2 text-sm font-normal text-primary bg-primary/10 px-2 py-0.5 rounded-full">
-                  {selectedProducts.size}
-                </span>
-              )}
-            </DialogTitle>
-          </DialogHeader>
-          <div className="p-4 pb-2 bg-background z-10">
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground" />
-              <Input
-                placeholder="Buscar produto..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="pl-10 h-12 rounded-xl bg-secondary/50 border-transparent focus:bg-background focus:border-primary transition-all"
-                autoFocus
-              />
-              {searchQuery && (
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="absolute right-1 top-1/2 -translate-y-1/2 h-8 w-8 hover:bg-transparent"
-                  onClick={() => setSearchQuery("")}
-                >
-                  <X className="w-4 h-4" />
-                </Button>
-              )}
-            </div>
-          </div>
-          <div className="flex-1 overflow-y-auto px-4 py-2 space-y-2">
-            {filteredProducts.map((product) => {
-              const isInList = items.some((item) => item.product_id === product.id);
-              const isSelected = selectedProducts.has(product.id);
-              return (
-                <button
-                  key={product.id}
-                  onClick={() => toggleProductSelection(product.id)}
-                  disabled={isInList}
-                  className={cn(
-                    "w-full p-4 text-left rounded-xl transition-all duration-200 flex items-center gap-3 active:scale-[0.99]",
-                    isInList
-                      ? "opacity-60 cursor-not-allowed bg-muted/50"
-                      : isSelected
-                        ? "bg-primary/10 ring-2 ring-primary ring-inset"
-                        : "bg-card border border-border hover:border-primary/50"
-                  )}
-                >
-                  <div className={cn(
-                    "flex items-center justify-center w-6 h-6 rounded-full border-2 flex-shrink-0 transition-all",
-                    isInList
-                      ? "border-muted-foreground/30 bg-muted-foreground/10"
-                      : isSelected
-                        ? "border-primary bg-primary"
-                        : "border-muted-foreground/30"
-                  )}>
-                    {(isInList || isSelected) && (
-                      <Check className={cn(
-                        "w-3.5 h-3.5",
-                        isInList ? "text-muted-foreground" : "text-primary-foreground"
-                      )} />
-                    )}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className={cn(
-                      "font-medium truncate text-base",
-                      isInList ? "text-muted-foreground" : "text-foreground"
-                    )}>
-                      {product.name}
-                    </p>
-                    <p className="text-sm text-muted-foreground truncate">
-                      {isInList ? "Já está na lista" : product.brand || "Sem marca"}
-                    </p>
-                  </div>
-                </button>
-              );
-            })}
-            {filteredProducts.length === 0 && (
-              <div className="py-8 text-center text-muted-foreground">
-                <p>Nenhum produto encontrado</p>
+          {isProductMode ? (
+            // MODO: CRIAR/EDITAR
+            <>
+              <DialogHeader className="p-4 pb-2 border-b border-border/50 bg-background z-10">
+                <DialogTitle className="font-display text-xl flex items-center gap-2">
+                  <Button variant="ghost" size="icon" className="h-8 w-8 -ml-2" onClick={() => setIsProductMode(null)}>
+                    <ArrowLeft className="w-5 h-5" />
+                  </Button>
+                  {isProductMode === 'create' ? 'Novo Produto' : 'Editar Produto'}
+                </DialogTitle>
+              </DialogHeader>
+              <div className="p-4 space-y-4 flex-1 bg-background">
+                <div className="bg-primary/5 p-3 rounded-lg flex gap-3 text-sm text-primary/80 mb-2">
+                  <AlertTriangle className="w-5 h-5 shrink-0" />
+                  <p>Atenção: As alterações aqui são globais e afetam a busca de todos os usuários.</p>
+                </div>
+
+                <div className="space-y-2">
+                  <Label>Nome do Produto</Label>
+                  <Input
+                    value={editingProductData.name}
+                    onChange={(e) => setEditingProductData(prev => ({ ...prev, name: e.target.value }))}
+                    placeholder="Ex: Arroz Branco"
+                    className="h-12 rounded-xl"
+                  />
+                  <p className="text-xs text-muted-foreground">O sistema corrigirá automaticamente a ortografia.</p>
+                </div>
+                <div className="space-y-2">
+                  <Label>Marca (Opcional)</Label>
+                  <Input
+                    value={editingProductData.brand}
+                    onChange={(e) => setEditingProductData(prev => ({ ...prev, brand: e.target.value }))}
+                    placeholder="Ex: Tio João"
+                    className="h-12 rounded-xl"
+                  />
+                </div>
               </div>
-            )}
-          </div>
-          <div className="p-4 border-t border-border bg-background z-10">
-            <Button
-              onClick={addSelectedProducts}
-              className="w-full h-14 rounded-xl text-lg font-medium shadow-md"
-              disabled={selectedProducts.size === 0 || addingProducts}
-            >
-              {addingProducts ? <Loader2 className="w-6 h-6 animate-spin" /> : <> <Plus className="w-5 h-5 mr-2" /> Adicionar {selectedProducts.size > 0 ? `${selectedProducts.size} produtos` : "Produtos"} </>}
-            </Button>
-          </div>
+              <div className="p-4 border-t border-border bg-background z-10">
+                <Button
+                  onClick={handleCreateOrUpdateProduct}
+                  className="w-full h-14 rounded-xl text-lg font-medium shadow-md"
+                  disabled={!editingProductData.name.trim() || validatingProduct}
+                >
+                  {validatingProduct ? (
+                    <> <Loader2 className="w-5 h-5 animate-spin mr-2" /> Validando... </>
+                  ) : (
+                    <> <Save className="w-5 h-5 mr-2" /> Salvar Produto </>
+                  )}
+                </Button>
+              </div>
+            </>
+          ) : (
+            // MODO: BUSCAR (Padrão)
+            <>
+              <DialogHeader className="p-4 pb-2 border-b border-border/50 bg-background z-10">
+                <DialogTitle className="font-display text-xl">
+                  Adicionar Produtos
+                  {selectedProducts.size > 0 && (
+                    <span className="ml-2 text-sm font-normal text-primary bg-primary/10 px-2 py-0.5 rounded-full">
+                      {selectedProducts.size}
+                    </span>
+                  )}
+                </DialogTitle>
+              </DialogHeader>
+              <div className="p-4 pb-2 bg-background z-10">
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground" />
+                  <Input
+                    placeholder="Buscar produto..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    className="pl-10 h-12 rounded-xl bg-secondary/50 border-transparent focus:bg-background focus:border-primary transition-all"
+                    autoFocus
+                  />
+                  {searchQuery && (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="absolute right-1 top-1/2 -translate-y-1/2 h-8 w-8 hover:bg-transparent"
+                      onClick={() => setSearchQuery("")}
+                    >
+                      <X className="w-4 h-4" />
+                    </Button>
+                  )}
+                </div>
+              </div>
+              <div className="flex-1 overflow-y-auto px-4 py-2 space-y-2">
+                {filteredProducts.length === 0 && searchQuery.length > 0 ? (
+                  <div className="py-8 text-center space-y-3">
+                    <p className="text-muted-foreground">Produto não encontrado.</p>
+                    {/* Botão de CRIAR mais evidente */}
+                    <Button
+                      variant="secondary"
+                      onClick={startCreateProduct}
+                      className="rounded-xl border border-dashed border-primary/50 bg-primary/5 hover:bg-primary/10 text-primary w-full h-12"
+                    >
+                      <Plus className="w-5 h-5 mr-2" /> Criar "{searchQuery}"
+                    </Button>
+                  </div>
+                ) : filteredProducts.length === 0 ? (
+                  <div className="py-8 text-center text-muted-foreground">
+                    <p>Digite para buscar...</p>
+                    <Button variant="ghost" onClick={startCreateProduct} className="mt-2 rounded-xl">
+                      <Plus className="w-4 h-4 mr-2" /> Criar novo produto
+                    </Button>
+                  </div>
+                ) : (
+                  filteredProducts.map((product) => {
+                    const isInList = items.some((item) => item.product_id === product.id);
+                    const isSelected = selectedProducts.has(product.id);
+
+                    return (
+                      <div key={product.id} className={cn(
+                        "relative w-full rounded-xl border transition-all duration-200 flex items-center group",
+                        isInList
+                          ? "bg-muted/30 border-muted-foreground/20" // Estilo discreto para itens na lista
+                          : isSelected
+                            ? "bg-primary/10 border-primary ring-1 ring-primary" // Estilo selecionado
+                            : "bg-card border-border hover:border-primary/50" // Estilo padrão
+                      )}>
+                        {/* Área de Clique Principal (Selecionar/Remover) */}
+                        <button
+                          onClick={() => toggleProductSelection(product.id)}
+                          className="flex-1 p-4 flex items-center gap-3 text-left min-w-0"
+                        >
+                          <div className={cn(
+                            "flex items-center justify-center w-6 h-6 rounded-full border-2 flex-shrink-0 transition-all",
+                            isInList
+                              ? "border-muted-foreground bg-muted-foreground text-background"
+                              : isSelected
+                                ? "border-primary bg-primary text-primary-foreground"
+                                : "border-muted-foreground/30"
+                          )}>
+                            {(isInList || isSelected) && (
+                              <Check className="w-3.5 h-3.5" />
+                            )}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <p className={cn(
+                              "font-medium truncate text-base",
+                              isInList ? "text-muted-foreground" : "text-foreground" // REMOVIDO line-through
+                            )}>
+                              {product.name}
+                            </p>
+                            <p className="text-sm text-muted-foreground truncate">
+                              {isInList ? "Toque para remover" : product.brand || "Sem marca"}
+                            </p>
+                          </div>
+                        </button>
+
+                        {/* Botão de Editar dentro do Card (Visível sempre) */}
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={(e) => startEditProduct(product, e)}
+                          className="mr-2 h-10 w-10 text-muted-foreground hover:text-primary hover:bg-primary/5 transition-colors z-10 shrink-0"
+                        >
+                          <Pencil className="w-4 h-4" />
+                        </Button>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+              <div className="p-4 border-t border-border bg-background z-10">
+                <Button
+                  onClick={addSelectedProducts}
+                  className="w-full h-14 rounded-xl text-lg font-medium shadow-md"
+                  disabled={selectedProducts.size === 0 || addingProducts}
+                >
+                  {addingProducts ? <Loader2 className="w-6 h-6 animate-spin" /> : <> <Plus className="w-5 h-5 mr-2" /> Adicionar {selectedProducts.size > 0 ? `${selectedProducts.size} produtos` : "Produtos"} </>}
+                </Button>
+              </div>
+            </>
+          )}
         </DialogContent>
       </Dialog>
 
