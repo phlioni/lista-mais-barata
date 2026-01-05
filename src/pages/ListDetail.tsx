@@ -1,9 +1,9 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useParams, useNavigate, useSearchParams } from "react-router-dom";
 import {
   ArrowLeft, Plus, Search, Scale, Loader2, X, ShoppingCart,
   Check, Store, Copy, Lock, MoreVertical, Pencil, Trash2,
-  AlertTriangle, Save
+  AlertTriangle, Save, Camera, ScanLine
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -39,6 +39,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
+import { ReceiptReconciliation, ScanResult } from "@/components/ReceiptReconciliation";
 
 interface Product {
   id: string;
@@ -130,6 +131,12 @@ export default function ListDetail() {
   // Duplication state
   const [newListName, setNewListName] = useState("");
   const [duplicating, setDuplicating] = useState(false);
+
+  // --- NOVOS STATES PARA SCANNER ---
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [isScanning, setIsScanning] = useState(false);
+  const [scanResult, setScanResult] = useState<ScanResult | null>(null);
+  const [showReconciliation, setShowReconciliation] = useState(false);
 
   useEffect(() => {
     if (!authLoading && !user) {
@@ -514,7 +521,7 @@ export default function ListDetail() {
           products: { ...item.products, name: correctedName, brand: correctedBrand }
         } : item));
 
-        toast({ title: "Produto atualizado", description: "Obrigado pela contribuição!" });
+        toast({ title: "Produto atualizado", description: "Alteração refletida para todos os usuários." });
       }
 
       // Reset
@@ -544,6 +551,139 @@ export default function ListDetail() {
     setEditingProductData({ id: product.id, name: product.name, brand: product.brand || '' });
   };
 
+  // --- LÓGICA DE SCANNER DE NOTA ---
+
+  const handleCameraClick = () => {
+    fileInputRef.current?.click();
+  };
+
+  const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    setIsScanning(true);
+    try {
+      // Convert to Base64
+      const reader = new FileReader();
+      reader.onloadend = async () => {
+        const base64String = reader.result as string;
+
+        // Prepare context for AI
+        const currentItemsContext = items.map(item => ({
+          id: item.id,
+          name: item.products.name,
+          brand: item.products.brand
+        }));
+
+        // Call Edge Function
+        const { data, error } = await supabase.functions.invoke('scan-receipt', {
+          body: {
+            imageBase64: base64String,
+            currentItems: currentItemsContext
+          }
+        });
+
+        if (error) throw error;
+
+        console.log("Scan Result:", data);
+        setScanResult(data);
+        setShowReconciliation(true);
+        setIsScanning(false);
+
+        // Reset input for next scan
+        if (fileInputRef.current) fileInputRef.current.value = '';
+      };
+
+      reader.readAsDataURL(file);
+
+    } catch (error) {
+      console.error("Error scanning receipt:", error);
+      toast({
+        title: "Erro na leitura",
+        description: "Não foi possível processar a imagem. Tente novamente.",
+        variant: "destructive"
+      });
+      setIsScanning(false);
+    }
+  };
+
+  const handleReconciliationConfirm = async (data: {
+    updates: Array<{ itemId: string; price: number }>;
+    newItems: Array<{ name: string; price: number; quantity: number }>;
+  }) => {
+
+    // 1. Aplicar atualizações de preço e checks nos itens existentes
+    const newPrices = { ...itemPrices };
+    const itemsToUpdate = [...items];
+
+    // Atualiza estado local
+    data.updates.forEach(update => {
+      newPrices[update.itemId] = update.price;
+      const idx = itemsToUpdate.findIndex(i => i.id === update.itemId);
+      if (idx !== -1) {
+        itemsToUpdate[idx] = { ...itemsToUpdate[idx], is_checked: true };
+        // Disparar update no banco em background para o check
+        toggleCheck(update.itemId);
+      }
+    });
+
+    setItemPrices(newPrices);
+    setItems(itemsToUpdate);
+
+    // 2. Criar novos produtos e adicioná-los à lista
+    if (data.newItems.length > 0) {
+      // Para simplificar, vamos criar os produtos um por um (poderia ser bulk)
+      for (const newItem of data.newItems) {
+        try {
+          // A. Tenta criar ou encontrar o produto
+          // (Lógica simplificada: cria direto. Ideal seria buscar antes, mas o backend valida nome)
+          const { data: productData, error: prodError } = await supabase
+            .from('products')
+            .insert({ name: newItem.name })
+            .select()
+            .single();
+
+          if (prodError) {
+            console.error("Error auto-creating product", prodError);
+            continue;
+          }
+
+          // B. Adiciona na lista
+          const { data: listItemData, error: itemError } = await supabase
+            .from('list_items')
+            .insert({
+              list_id: id,
+              product_id: productData.id,
+              quantity: newItem.quantity,
+              is_checked: true // Já entra comprado
+            })
+            .select(`
+              id,
+              product_id,
+              quantity,
+              is_checked,
+              products (id, name, brand)
+            `)
+            .single();
+
+          if (listItemData) {
+            setItems(prev => [...prev, listItemData as ListItem]);
+            // Define o preço para o novo item
+            setItemPrices(prev => ({ ...prev, [listItemData.id]: newItem.price }));
+          }
+
+        } catch (e) {
+          console.error("Error processing new item from scan", e);
+        }
+      }
+    }
+
+    toast({
+      title: "Lista atualizada",
+      description: `${data.updates.length} itens atualizados e ${data.newItems.length} novos adicionados.`,
+    });
+  };
+
   // ----------------------------------------------------
 
   const toggleCheck = async (itemId: string) => {
@@ -553,7 +693,7 @@ export default function ListDetail() {
     if (!item) return;
 
     const newCheckedState = !item.is_checked;
-    setItems(items.map((i) =>
+    setItems(prev => prev.map((i) =>
       i.id === itemId ? { ...i, is_checked: newCheckedState } : i
     ));
 
@@ -564,7 +704,8 @@ export default function ListDetail() {
         .eq("id", itemId);
 
       if (error) {
-        setItems(items.map((i) =>
+        // Revert
+        setItems(prev => prev.map((i) =>
           i.id === itemId ? { ...i, is_checked: !newCheckedState } : i
         ));
         throw error;
@@ -842,6 +983,16 @@ export default function ListDetail() {
 
   return (
     <div className="min-h-screen bg-background pb-8">
+      {/* Hidden File Input for Receipt Scanning */}
+      <input
+        type="file"
+        accept="image/*"
+        capture="environment"
+        className="hidden"
+        ref={fileInputRef}
+        onChange={handleFileUpload}
+      />
+
       {/* Header (Mantido Original) */}
       <header className="sticky top-0 z-40 bg-background/90 backdrop-blur-lg border-b border-border transition-all">
         <div className="flex items-center gap-2 px-4 py-3 max-w-md mx-auto">
@@ -985,7 +1136,7 @@ export default function ListDetail() {
         )}
       </main>
 
-      {/* Footer Actions (Mantido Original) */}
+      {/* Footer Actions */}
       {items.length > 0 && (
         <div className="fixed bottom-0 left-0 right-0 p-4 bg-background/80 backdrop-blur-xl border-t border-border z-30 safe-bottom">
           <div className="max-w-md mx-auto space-y-3">
@@ -1054,10 +1205,22 @@ export default function ListDetail() {
                 <Button
                   onClick={cancelShopping}
                   variant="outline"
-                  className="flex-1 h-14 rounded-xl"
+                  className="w-14 shrink-0 h-14 rounded-xl"
+                  title="Cancelar"
                 >
-                  Cancelar
+                  <X className="w-5 h-5" />
                 </Button>
+
+                {/* BOTÃO DE SCAN (NOVO) */}
+                <Button
+                  onClick={handleCameraClick}
+                  variant="secondary"
+                  className="w-14 shrink-0 h-14 rounded-xl border border-primary/20"
+                  disabled={isScanning}
+                >
+                  {isScanning ? <Loader2 className="w-5 h-5 animate-spin" /> : <Camera className="w-5 h-5 text-primary" />}
+                </Button>
+
                 <Button
                   onClick={() => setFinishDialogOpen(true)}
                   className="flex-1 h-14 rounded-xl shadow-lg shadow-primary/20"
@@ -1070,6 +1233,15 @@ export default function ListDetail() {
           </div>
         </div>
       )}
+
+      {/* --- RECONCILIATION DIALOG (NOVO) --- */}
+      <ReceiptReconciliation
+        open={showReconciliation}
+        onOpenChange={setShowReconciliation}
+        scanResult={scanResult}
+        currentItems={items.map(i => ({ id: i.id, name: i.products.name, brand: i.products.brand }))}
+        onConfirm={handleReconciliationConfirm}
+      />
 
       {/* Dialogs Originais */}
       <Dialog open={editNameDialogOpen} onOpenChange={setEditNameDialogOpen}>
