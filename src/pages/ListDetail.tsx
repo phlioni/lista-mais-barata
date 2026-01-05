@@ -3,7 +3,7 @@ import { useParams, useNavigate, useSearchParams } from "react-router-dom";
 import {
   ArrowLeft, Plus, Search, Scale, Loader2, X, ShoppingCart,
   Check, Store, Copy, Lock, MoreVertical, Pencil, Trash2,
-  AlertTriangle, Save, Camera, ScanLine
+  AlertTriangle, Save, Camera
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -80,10 +80,7 @@ export default function ListDetail() {
   const routeMarketId = params.marketId;
   const routeListId = params.listId;
 
-  // Resolve qual ID usar
   const id = routeListId || routeId;
-
-  // Flag para modo visualização de comparação
   const isCompareMode = !!routeMarketId;
 
   const [searchParams] = useSearchParams();
@@ -92,8 +89,6 @@ export default function ListDetail() {
   const { toast } = useToast();
 
   const preselectedMarketId = searchParams.get("marketId");
-
-  // Flag crucial: indica se devemos forçar o uso de preços (vindo do Comparar)
   const usePrices = searchParams.get("usePrices") === "true";
 
   const [list, setList] = useState<ShoppingList | null>(null);
@@ -102,7 +97,6 @@ export default function ListDetail() {
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
 
-  // Dialogs
   const [addDialogOpen, setAddDialogOpen] = useState(false);
   const [duplicateDialogOpen, setDuplicateDialogOpen] = useState(false);
   const [finishDialogOpen, setFinishDialogOpen] = useState(false);
@@ -116,23 +110,20 @@ export default function ListDetail() {
   const [selectedProducts, setSelectedProducts] = useState<Set<string>>(new Set());
   const [addingProducts, setAddingProducts] = useState(false);
 
-  // --- NOVOS STATES PARA CRIAÇÃO/EDIÇÃO DE PRODUTOS ---
   const [isProductMode, setIsProductMode] = useState<'create' | 'edit' | null>(null);
   const [editingProductData, setEditingProductData] = useState<{ id?: string, name: string, brand: string }>({ name: '', brand: '' });
   const [validatingProduct, setValidatingProduct] = useState(false);
 
-  // Shopping mode state
   const [isShoppingMode, setIsShoppingMode] = useState(false);
   const [selectedMarket, setSelectedMarket] = useState<Market | null>(null);
   const [itemPrices, setItemPrices] = useState<ItemPrice>({});
   const [saving, setSaving] = useState(false);
   const [startingShopping, setStartingShopping] = useState(false);
 
-  // Duplication state
   const [newListName, setNewListName] = useState("");
   const [duplicating, setDuplicating] = useState(false);
 
-  // --- NOVOS STATES PARA SCANNER ---
+  // Scanner States
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isScanning, setIsScanning] = useState(false);
   const [scanResult, setScanResult] = useState<ScanResult | null>(null);
@@ -165,9 +156,7 @@ export default function ListDetail() {
           { event: '*', schema: 'public', table: 'market_prices' },
           (payload) => {
             const currentMarketId = routeMarketId || list?.market_id || selectedMarket?.id;
-
             if (isCompareMode && currentMarketId && payload.new && (payload.new as any).market_id === currentMarketId) {
-              console.log("Preço atualizado externamente. Recarregando...");
               loadMarketData(currentMarketId, isShoppingMode, true);
             }
           }
@@ -296,7 +285,11 @@ export default function ListDetail() {
           }
         }
       } else {
-        setItemPrices({});
+        // CORREÇÃO: Não zera preços se já existirem (ex: via OCR)
+        setItemPrices(prev => {
+          if (Object.keys(prev).length === 0) return {};
+          return prev;
+        });
       }
 
       if (enableShoppingMode) {
@@ -363,19 +356,14 @@ export default function ListDetail() {
     }
   };
 
-  // --- SELEÇÃO / REMOÇÃO DE PRODUTOS ---
-
   const toggleProductSelection = (productId: string) => {
-    // Verifica se já está na lista principal (Items)
     const existingItem = items.find((item) => item.product_id === productId);
 
     if (existingItem) {
-      // Se já existe, o usuário quer REMOVER da lista
       removeItem(existingItem.id);
       return;
     }
 
-    // Se não está na lista principal, gerencia a seleção temporária para adição em massa
     setSelectedProducts((prev) => {
       const newSet = new Set(prev);
       if (newSet.has(productId)) {
@@ -434,19 +422,16 @@ export default function ListDetail() {
     if (!open) {
       setSelectedProducts(new Set());
       setSearchQuery("");
-      setIsProductMode(null); // Resetar modo ao fechar
+      setIsProductMode(null);
     }
     setAddDialogOpen(open);
   };
-
-  // --- LÓGICA DE CRIAÇÃO/EDIÇÃO DE PRODUTOS ---
 
   const handleCreateOrUpdateProduct = async () => {
     if (!editingProductData.name.trim()) return;
 
     setValidatingProduct(true);
     try {
-      // 1. Validar e corrigir com IA
       const { data: validationData, error: validationError } = await supabase.functions.invoke('validate-product', {
         body: { name: editingProductData.name, brand: editingProductData.brand }
       });
@@ -465,7 +450,6 @@ export default function ListDetail() {
       const correctedName = validationData.correctedName;
       const correctedBrand = validationData.correctedBrand || null;
 
-      // 2. Verificar Duplicidade
       let duplicateQuery = supabase.from('products')
         .select('*')
         .ilike('name', correctedName);
@@ -490,7 +474,6 @@ export default function ListDetail() {
         return;
       }
 
-      // 3. Salvar no Banco
       if (isProductMode === 'create') {
         const { data: newProduct, error: createError } = await supabase
           .from('products')
@@ -501,7 +484,7 @@ export default function ListDetail() {
         if (createError) throw createError;
 
         setProducts(prev => [...prev, newProduct]);
-        toggleProductSelection(newProduct.id); // Seleciona automaticamente
+        toggleProductSelection(newProduct.id);
 
         toast({ title: "Produto criado", description: `${newProduct.name} foi adicionado.` });
       } else if (isProductMode === 'edit' && editingProductData.id) {
@@ -512,10 +495,7 @@ export default function ListDetail() {
 
         if (updateError) throw updateError;
 
-        // Atualiza lista local
         setProducts(prev => prev.map(p => p.id === editingProductData.id ? { ...p, name: correctedName, brand: correctedBrand } : p));
-
-        // Atualiza itens da lista atual que usam esse produto
         setItems(prev => prev.map(item => item.product_id === editingProductData.id ? {
           ...item,
           products: { ...item.products, name: correctedName, brand: correctedBrand }
@@ -524,7 +504,6 @@ export default function ListDetail() {
         toast({ title: "Produto atualizado", description: "Alteração refletida para todos os usuários." });
       }
 
-      // Reset
       setIsProductMode(null);
       setEditingProductData({ name: '', brand: '' });
 
@@ -551,7 +530,7 @@ export default function ListDetail() {
     setEditingProductData({ id: product.id, name: product.name, brand: product.brand || '' });
   };
 
-  // --- LÓGICA DE SCANNER DE NOTA ---
+  // --- SCANNER LOGIC ---
 
   const handleCameraClick = () => {
     fileInputRef.current?.click();
@@ -563,19 +542,16 @@ export default function ListDetail() {
 
     setIsScanning(true);
     try {
-      // Convert to Base64
       const reader = new FileReader();
       reader.onloadend = async () => {
         const base64String = reader.result as string;
 
-        // Prepare context for AI
         const currentItemsContext = items.map(item => ({
           id: item.id,
           name: item.products.name,
           brand: item.products.brand
         }));
 
-        // Call Edge Function
         const { data, error } = await supabase.functions.invoke('scan-receipt', {
           body: {
             imageBase64: base64String,
@@ -590,7 +566,6 @@ export default function ListDetail() {
         setShowReconciliation(true);
         setIsScanning(false);
 
-        // Reset input for next scan
         if (fileInputRef.current) fileInputRef.current.value = '';
       };
 
@@ -612,17 +587,15 @@ export default function ListDetail() {
     newItems: Array<{ name: string; price: number; quantity: number }>;
   }) => {
 
-    // 1. Aplicar atualizações de preço e checks nos itens existentes
+    // 1. Atualiza preços locais sem depender de reload
     const newPrices = { ...itemPrices };
     const itemsToUpdate = [...items];
 
-    // Atualiza estado local
     data.updates.forEach(update => {
       newPrices[update.itemId] = update.price;
       const idx = itemsToUpdate.findIndex(i => i.id === update.itemId);
       if (idx !== -1) {
         itemsToUpdate[idx] = { ...itemsToUpdate[idx], is_checked: true };
-        // Disparar update no banco em background para o check
         toggleCheck(update.itemId);
       }
     });
@@ -630,13 +603,10 @@ export default function ListDetail() {
     setItemPrices(newPrices);
     setItems(itemsToUpdate);
 
-    // 2. Criar novos produtos e adicioná-los à lista
+    // 2. Adiciona novos produtos
     if (data.newItems.length > 0) {
-      // Para simplificar, vamos criar os produtos um por um (poderia ser bulk)
       for (const newItem of data.newItems) {
         try {
-          // A. Tenta criar ou encontrar o produto
-          // (Lógica simplificada: cria direto. Ideal seria buscar antes, mas o backend valida nome)
           const { data: productData, error: prodError } = await supabase
             .from('products')
             .insert({ name: newItem.name })
@@ -648,14 +618,13 @@ export default function ListDetail() {
             continue;
           }
 
-          // B. Adiciona na lista
-          const { data: listItemData, error: itemError } = await supabase
+          const { data: listItemData } = await supabase
             .from('list_items')
             .insert({
               list_id: id,
               product_id: productData.id,
               quantity: newItem.quantity,
-              is_checked: true // Já entra comprado
+              is_checked: true
             })
             .select(`
               id,
@@ -668,7 +637,6 @@ export default function ListDetail() {
 
           if (listItemData) {
             setItems(prev => [...prev, listItemData as ListItem]);
-            // Define o preço para o novo item
             setItemPrices(prev => ({ ...prev, [listItemData.id]: newItem.price }));
           }
 
@@ -704,7 +672,6 @@ export default function ListDetail() {
         .eq("id", itemId);
 
       if (error) {
-        // Revert
         setItems(prev => prev.map((i) =>
           i.id === itemId ? { ...i, is_checked: !newCheckedState } : i
         ));
@@ -790,7 +757,11 @@ export default function ListDetail() {
       await loadMarketData(selectedMarket.id, true, shouldLoadPrices);
 
       if (!shouldLoadPrices) {
-        setItemPrices({});
+        // CORREÇÃO: Não limpa preços se já houver (OCR)
+        setItemPrices(prev => {
+          if (Object.keys(prev).length === 0) return {};
+          return prev;
+        });
       }
 
       items.forEach((item) => {
@@ -860,7 +831,6 @@ export default function ListDetail() {
         price: itemPrices[item.id],
       }));
 
-      // MELHORIA DE PERFORMANCE: Promise.all
       await Promise.all(priceRecords.map(async (record) => {
         const { data: existing } = await supabase
           .from("market_prices")
@@ -982,8 +952,8 @@ export default function ListDetail() {
   }
 
   return (
-    <div className="min-h-screen bg-background pb-8">
-      {/* Hidden File Input for Receipt Scanning */}
+    // CORREÇÃO: Padding dinâmico para garantir que o último item apareça acima do footer
+    <div className={cn("min-h-screen bg-background transition-all", items.length > 0 ? "pb-40" : "pb-8")}>
       <input
         type="file"
         accept="image/*"
@@ -993,7 +963,6 @@ export default function ListDetail() {
         onChange={handleFileUpload}
       />
 
-      {/* Header (Mantido Original) */}
       <header className="sticky top-0 z-40 bg-background/90 backdrop-blur-lg border-b border-border transition-all">
         <div className="flex items-center gap-2 px-4 py-3 max-w-md mx-auto">
           <Button
@@ -1087,7 +1056,6 @@ export default function ListDetail() {
         )}
       </header>
 
-      {/* Main List (Mantido Original) */}
       <main className="px-4 py-4 max-w-md mx-auto">
         {!isShoppingMode && !isClosed && !isCompareMode && items.length > 0 && (
           <div className="mb-6 animate-fade-in">
@@ -1136,7 +1104,6 @@ export default function ListDetail() {
         )}
       </main>
 
-      {/* Footer Actions */}
       {items.length > 0 && (
         <div className="fixed bottom-0 left-0 right-0 p-4 bg-background/80 backdrop-blur-xl border-t border-border z-30 safe-bottom">
           <div className="max-w-md mx-auto space-y-3">
@@ -1211,7 +1178,6 @@ export default function ListDetail() {
                   <X className="w-5 h-5" />
                 </Button>
 
-                {/* BOTÃO DE SCAN (NOVO) */}
                 <Button
                   onClick={handleCameraClick}
                   variant="secondary"
@@ -1234,7 +1200,6 @@ export default function ListDetail() {
         </div>
       )}
 
-      {/* --- RECONCILIATION DIALOG (NOVO) --- */}
       <ReceiptReconciliation
         open={showReconciliation}
         onOpenChange={setShowReconciliation}
@@ -1243,7 +1208,6 @@ export default function ListDetail() {
         onConfirm={handleReconciliationConfirm}
       />
 
-      {/* Dialogs Originais */}
       <Dialog open={editNameDialogOpen} onOpenChange={setEditNameDialogOpen}>
         <DialogContent className="w-[90%] max-w-sm mx-auto rounded-2xl p-6">
           <DialogHeader>
@@ -1316,11 +1280,9 @@ export default function ListDetail() {
         </DialogContent>
       </Dialog>
 
-      {/* --- DIALOG DE ADICIONAR / CRIAR PRODUTOS --- */}
       <Dialog open={addDialogOpen} onOpenChange={closeAddDialog}>
         <DialogContent className="w-[95%] max-w-sm mx-auto rounded-2xl h-[85vh] p-0 gap-0 overflow-hidden flex flex-col">
           {isProductMode ? (
-            // MODO: CRIAR/EDITAR
             <>
               <DialogHeader className="p-4 pb-2 border-b border-border/50 bg-background z-10">
                 <DialogTitle className="font-display text-xl flex items-center gap-2">
@@ -1371,7 +1333,6 @@ export default function ListDetail() {
               </div>
             </>
           ) : (
-            // MODO: BUSCAR (Padrão)
             <>
               <DialogHeader className="p-4 pb-2 border-b border-border/50 bg-background z-10">
                 <DialogTitle className="font-display text-xl">
@@ -1409,7 +1370,6 @@ export default function ListDetail() {
                 {filteredProducts.length === 0 && searchQuery.length > 0 ? (
                   <div className="py-8 text-center space-y-3">
                     <p className="text-muted-foreground">Produto não encontrado.</p>
-                    {/* Botão de CRIAR mais evidente */}
                     <Button
                       variant="secondary"
                       onClick={startCreateProduct}
@@ -1434,12 +1394,11 @@ export default function ListDetail() {
                       <div key={product.id} className={cn(
                         "relative w-full rounded-xl border transition-all duration-200 flex items-center group",
                         isInList
-                          ? "bg-muted/30 border-muted-foreground/20" // Estilo discreto para itens na lista
+                          ? "bg-muted/30 border-muted-foreground/20"
                           : isSelected
-                            ? "bg-primary/10 border-primary ring-1 ring-primary" // Estilo selecionado
-                            : "bg-card border-border hover:border-primary/50" // Estilo padrão
+                            ? "bg-primary/10 border-primary ring-1 ring-primary"
+                            : "bg-card border-border hover:border-primary/50"
                       )}>
-                        {/* Área de Clique Principal (Selecionar/Remover) */}
                         <button
                           onClick={() => toggleProductSelection(product.id)}
                           className="flex-1 p-4 flex items-center gap-3 text-left min-w-0"
@@ -1459,7 +1418,7 @@ export default function ListDetail() {
                           <div className="flex-1 min-w-0">
                             <p className={cn(
                               "font-medium truncate text-base",
-                              isInList ? "text-muted-foreground" : "text-foreground" // REMOVIDO line-through
+                              isInList ? "text-muted-foreground" : "text-foreground"
                             )}>
                               {product.name}
                             </p>
@@ -1468,8 +1427,6 @@ export default function ListDetail() {
                             </p>
                           </div>
                         </button>
-
-                        {/* Botão de Editar dentro do Card (Visível sempre) */}
                         <Button
                           variant="ghost"
                           size="icon"
