@@ -284,7 +284,8 @@ export default function Compare() {
         }
       }
 
-      setResults(viableMarkets.slice(0, 5));
+      // MODIFICADO: Aumentado o limite de slice de 5 para 10
+      setResults(viableMarkets.slice(0, 10));
     } catch (error) {
       console.error("Error comparing markets:", error);
       if (!silent) {
