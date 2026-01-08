@@ -10,31 +10,6 @@ import { useAuth } from "@/hooks/useAuth";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 
-interface ListItem {
-  id: string;
-  product_id: string;
-  quantity: number;
-  products: {
-    id: string;
-    name: string;
-  };
-}
-
-interface Market {
-  id: string;
-  name: string;
-  latitude: number;
-  longitude: number;
-  address: string | null;
-}
-
-interface MarketPrice {
-  market_id: string;
-  product_id: string;
-  price: number;
-  created_at: string;
-}
-
 interface MarketResult {
   id: string;
   name: string;
@@ -47,18 +22,6 @@ interface MarketResult {
   realCost: number;
   isRecommended: boolean;
   lastUpdate: string;
-}
-
-function calculateDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
-  const R = 6371;
-  const dLat = (lat2 - lat1) * Math.PI / 180;
-  const dLon = (lon2 - lon1) * Math.PI / 180;
-  const a =
-    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
-    Math.sin(dLon / 2) * Math.sin(dLon / 2);
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  return R * c;
 }
 
 export default function Compare() {
@@ -104,6 +67,7 @@ export default function Compare() {
     }
   }, []);
 
+  // Realtime update: Se houver mudança de preços, reexecuta a comparação
   useEffect(() => {
     if (!hasSearched) return;
 
@@ -112,8 +76,8 @@ export default function Compare() {
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'market_prices' },
-        (payload) => {
-          console.log("Preço alterado externamente, recalculando...", payload);
+        () => {
+          console.log("Preço alterado externamente, recalculando...");
           compareMarkets(true);
         }
       )
@@ -126,14 +90,12 @@ export default function Compare() {
 
   const fetchListName = async () => {
     if (!id) return;
-
     try {
       const { data, error } = await supabase
         .from("shopping_lists")
         .select("name")
         .eq("id", id)
         .single();
-
       if (error) throw error;
       setListName(data.name);
     } catch (error) {
@@ -148,150 +110,29 @@ export default function Compare() {
     setHasSearched(true);
 
     try {
-      const { data: itemsData, error: itemsError } = await supabase
-        .from("list_items")
-        .select(`
-          id,
-          product_id,
-          quantity,
-          products (id, name)
-        `)
-        .eq("list_id", id);
-
-      if (itemsError) throw itemsError;
-      const items = itemsData as ListItem[];
-
-      if (items.length === 0) {
-        if (!silent) {
-          toast({
-            title: "Lista vazia",
-            description: "Adicione produtos à lista antes de comparar",
-            variant: "destructive",
-          });
+      // Chamada para a nova Edge Function Inteligente
+      const { data, error } = await supabase.functions.invoke('smart-compare', {
+        body: {
+          listId: id,
+          userLocation: userLocation,
+          radius: radius
         }
-        setLoading(false);
-        return;
-      }
-
-      const { data: marketsData, error: marketsError } = await supabase
-        .from("markets")
-        .select("*");
-
-      if (marketsError) throw marketsError;
-
-      const marketsInRadius = (marketsData as Market[]).filter((market) => {
-        const distance = calculateDistance(
-          userLocation.lat,
-          userLocation.lng,
-          market.latitude,
-          market.longitude
-        );
-        return distance <= radius;
       });
 
-      if (marketsInRadius.length === 0) {
-        setResults([]);
-        setLoading(false);
-        return;
+      if (error) throw error;
+
+      if (data.error) {
+        throw new Error(data.error);
       }
 
-      const productIds = items.map((item) => item.product_id);
-      const marketIds = marketsInRadius.map((market) => market.id);
+      setResults(data.results || []);
 
-      const { data: pricesData, error: pricesError } = await supabase
-        .from("market_prices")
-        .select("*")
-        .in("market_id", marketIds)
-        .in("product_id", productIds);
-
-      if (pricesError) throw pricesError;
-      const prices = pricesData as MarketPrice[];
-
-      const marketResults: MarketResult[] = marketsInRadius.map((market) => {
-        const distance = calculateDistance(
-          userLocation.lat,
-          userLocation.lng,
-          market.latitude,
-          market.longitude
-        );
-
-        let totalPrice = 0;
-        let missingItems = 0;
-
-        const foundPriceDates: string[] = [];
-
-        items.forEach((item) => {
-          const priceEntry = prices.find(
-            (p) => p.market_id === market.id && p.product_id === item.product_id
-          );
-
-          if (priceEntry) {
-            totalPrice += priceEntry.price * item.quantity;
-            foundPriceDates.push(priceEntry.created_at);
-          } else {
-            missingItems++;
-          }
-        });
-
-        let lastUpdate = new Date().toISOString();
-        if (foundPriceDates.length > 0) {
-          foundPriceDates.sort((a, b) => new Date(b).getTime() - new Date(a).getTime());
-          lastUpdate = foundPriceDates[0];
-        }
-
-        const coveragePercent = Math.round(((items.length - missingItems) / items.length) * 100);
-        const travelCost = distance * 2 * 1.5;
-        const realCost = totalPrice + travelCost;
-
-        return {
-          id: market.id,
-          name: market.name,
-          address: market.address,
-          totalPrice,
-          distance,
-          missingItems,
-          totalItems: items.length,
-          coveragePercent,
-          realCost,
-          isRecommended: false,
-          lastUpdate,
-        };
-      });
-
-      const viableMarkets = marketResults.filter(
-        (m) => m.totalPrice > 0 && m.coveragePercent >= 30
-      );
-
-      viableMarkets.sort((a, b) => {
-        if (a.missingItems === 0 && b.missingItems > 0) return -1;
-        if (b.missingItems === 0 && a.missingItems > 0) return 1;
-        return a.realCost - b.realCost;
-      });
-
-      if (viableMarkets.length > 0) {
-        let recommendedIndex = 0;
-        const completeMarkets = viableMarkets.filter(m => m.missingItems === 0);
-
-        if (completeMarkets.length > 0) {
-          const bestComplete = completeMarkets[0];
-          const priceDiff = viableMarkets[0].realCost - bestComplete.realCost;
-          if (priceDiff < 0 || (viableMarkets[0].missingItems > 0 && priceDiff / viableMarkets[0].realCost < 0.2)) {
-            recommendedIndex = viableMarkets.findIndex(m => m.id === bestComplete.id);
-          }
-        }
-        if (viableMarkets[recommendedIndex]) {
-          viableMarkets[recommendedIndex].isRecommended = true;
-        }
-      }
-
-      // MODIFICADO: Aumentado o limite de slice de 5 para 10
-      setResults(viableMarkets.slice(0, 10));
     } catch (error) {
       console.error("Error comparing markets:", error);
       if (!silent) {
         toast({
           title: "Erro",
-          description: "Não foi possível comparar os preços",
+          description: "Não foi possível comparar os preços. Tente novamente.",
           variant: "destructive",
         });
       }
@@ -355,7 +196,7 @@ export default function Compare() {
           ) : (
             <>
               <Sparkles className="w-5 h-5 mr-2" />
-              Buscar Melhores Preços
+              Buscar Melhores Preços (Inteligente)
             </>
           )}
         </Button>
@@ -365,8 +206,8 @@ export default function Compare() {
             {results.length === 0 ? (
               <EmptyState
                 icon={<MapPin className="w-8 h-8 text-primary" />}
-                title="Nenhum mercado encontrado"
-                description={`Não há mercados com preços cadastrados em um raio de ${radius}km`}
+                title="Nenhum mercado viável"
+                description={`Não encontramos mercados com produtos compatíveis em um raio de ${radius}km.`}
               />
             ) : (
               <div className="space-y-3">

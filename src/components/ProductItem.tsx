@@ -7,7 +7,8 @@ import { cn } from "@/lib/utils";
 interface ProductItemProps {
   id: string;
   name: string;
-  brand?: string;
+  brand?: string | null;
+  measurement?: string | null; // Novo campo
   quantity: number;
   isChecked: boolean;
   price?: number;
@@ -23,6 +24,7 @@ export function ProductItem({
   id,
   name,
   brand,
+  measurement,
   quantity,
   isChecked,
   price,
@@ -34,7 +36,6 @@ export function ProductItem({
   onRemove,
 }: ProductItemProps) {
 
-  // Função para formatar o número para o padrão brasileiro (Ex: 12,50)
   const formatCurrencyValue = (value: number | undefined) => {
     if (value === undefined) return "";
     return value.toLocaleString("pt-BR", {
@@ -43,21 +44,13 @@ export function ProductItem({
     });
   };
 
-  // Lógica da máscara de moeda
   const handlePriceChange = (rawValue: string) => {
-    // 1. Remove tudo que não for número
     const onlyDigits = rawValue.replace(/\D/g, "");
-
-    // 2. Se estiver vazio, define como 0
     if (onlyDigits === "") {
       onUpdatePrice(id, 0);
       return;
     }
-
-    // 3. Converte para número e divide por 100 para ter os centavos
-    // Ex: Digita "1234" -> 1234 / 100 = 12.34
     const floatValue = Number(onlyDigits) / 100;
-
     onUpdatePrice(id, floatValue);
   };
 
@@ -65,7 +58,6 @@ export function ProductItem({
     <div
       className={cn(
         "group p-3 rounded-xl border transition-all duration-200",
-        // Layout responsivo: Coluna no mobile, Linha no desktop
         "flex flex-col sm:flex-row sm:items-center gap-3",
         isChecked
           ? "bg-muted/50 border-transparent opacity-75"
@@ -92,11 +84,21 @@ export function ProductItem({
           >
             {name}
           </p>
-          {brand && (
-            <p className="text-[11px] text-muted-foreground truncate mt-0.5 font-medium">
-              {brand}
-            </p>
-          )}
+
+          {/* Linha de Marca e Medida */}
+          <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+            {brand && (
+              <p className="text-[11px] text-muted-foreground truncate font-medium">
+                {brand}
+              </p>
+            )}
+
+            {measurement && (
+              <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-muted text-primary/80 border border-border/50">
+                {measurement}
+              </span>
+            )}
+          </div>
         </div>
       </div>
 
@@ -106,15 +108,14 @@ export function ProductItem({
         "justify-end w-full pl-8 sm:pl-0 sm:w-auto sm:justify-start"
       )}>
 
-        {/* Input de Preço com Máscara */}
         {showPriceInput && (
           <div className="relative w-[100px] sm:w-[95px]">
             <span className="absolute left-2 top-1/2 -translate-y-1/2 text-xs text-muted-foreground font-medium pointer-events-none">
               R$
             </span>
             <Input
-              type="text" // Mudado de 'number' para 'text' para controlar a formatação
-              inputMode="numeric" // Garante teclado numérico no celular
+              type="text"
+              inputMode="numeric"
               placeholder="0,00"
               value={formatCurrencyValue(price)}
               onChange={(e) => handlePriceChange(e.target.value)}
@@ -123,7 +124,6 @@ export function ProductItem({
           </div>
         )}
 
-        {/* Exibição de Preço (Modo Leitura) */}
         {!showPriceInput && price !== undefined && price > 0 && (
           <div className="text-right px-1">
             <p className="text-sm font-bold text-emerald-600 whitespace-nowrap">
@@ -137,7 +137,6 @@ export function ProductItem({
           </div>
         )}
 
-        {/* Controles de Quantidade */}
         {!readonly && (
           <div className="flex items-center bg-secondary/30 rounded-lg border border-border/50 h-9 sm:h-8">
             <button
@@ -159,14 +158,12 @@ export function ProductItem({
           </div>
         )}
 
-        {/* Quantidade (Modo Leitura Simples) */}
         {readonly && !showPriceInput && !price && (
           <span className="text-xs font-medium bg-secondary px-2 py-1 rounded-md text-muted-foreground whitespace-nowrap">
             {quantity} un
           </span>
         )}
 
-        {/* Botão Excluir */}
         {!readonly && (
           <Button
             variant="ghost"
