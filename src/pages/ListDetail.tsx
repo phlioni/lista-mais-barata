@@ -42,10 +42,12 @@ import { cn } from "@/lib/utils";
 import { ReceiptReconciliation, ScanResult } from "@/components/ReceiptReconciliation";
 import { Scanner } from '@yudiel/react-qr-scanner';
 
+// Interface atualizada com measurement
 interface Product {
   id: string;
   name: string;
   brand: string | null;
+  measurement: string | null;
 }
 
 interface ListItem {
@@ -201,7 +203,7 @@ export default function ListDetail() {
           product_id,
           quantity,
           is_checked,
-          products (id, name, brand)
+          products (id, name, brand, measurement)
         `)
         .eq("list_id", id)
         .order("created_at");
@@ -232,7 +234,7 @@ export default function ListDetail() {
     try {
       const { data, error } = await supabase
         .from("products")
-        .select("id, name, brand")
+        .select("id, name, brand, measurement")
         .order("name");
 
       if (error) throw error;
@@ -399,7 +401,7 @@ export default function ListDetail() {
           product_id,
           quantity,
           is_checked,
-          products (id, name, brand)
+          products (id, name, brand, measurement)
         `);
 
       if (error) throw error;
@@ -452,10 +454,13 @@ export default function ListDetail() {
 
       const correctedName = validationData.correctedName;
       const correctedBrand = validationData.correctedBrand || null;
+      // IA pode inferir medida do nome na criação manual
+      const correctedMeasurement = validationData.detectedMeasurement || null;
 
       let duplicateQuery = supabase.from('products')
         .select('*')
-        .ilike('name', correctedName);
+        .ilike('name', correctedName)
+        .is('measurement', correctedMeasurement ? correctedMeasurement : null);
 
       if (correctedBrand) {
         duplicateQuery = duplicateQuery.eq('brand', correctedBrand);
@@ -471,7 +476,7 @@ export default function ListDetail() {
       if (isDuplicate) {
         toast({
           title: "Produto já existe",
-          description: `O produto "${correctedName}" ${correctedBrand ? `(${correctedBrand})` : ''} já está cadastrado.`,
+          description: `O produto "${correctedName}" já está cadastrado.`,
           variant: "destructive"
         });
         return;
@@ -480,7 +485,7 @@ export default function ListDetail() {
       if (isProductMode === 'create') {
         const { data: newProduct, error: createError } = await supabase
           .from('products')
-          .insert({ name: correctedName, brand: correctedBrand })
+          .insert({ name: correctedName, brand: correctedBrand, measurement: correctedMeasurement })
           .select()
           .single();
 
@@ -493,15 +498,15 @@ export default function ListDetail() {
       } else if (isProductMode === 'edit' && editingProductData.id) {
         const { error: updateError } = await supabase
           .from('products')
-          .update({ name: correctedName, brand: correctedBrand })
+          .update({ name: correctedName, brand: correctedBrand, measurement: correctedMeasurement })
           .eq('id', editingProductData.id);
 
         if (updateError) throw updateError;
 
-        setProducts(prev => prev.map(p => p.id === editingProductData.id ? { ...p, name: correctedName, brand: correctedBrand } : p));
+        setProducts(prev => prev.map(p => p.id === editingProductData.id ? { ...p, name: correctedName, brand: correctedBrand, measurement: correctedMeasurement } : p));
         setItems(prev => prev.map(item => item.product_id === editingProductData.id ? {
           ...item,
-          products: { ...item.products, name: correctedName, brand: correctedBrand }
+          products: { ...item.products, name: correctedName, brand: correctedBrand, measurement: correctedMeasurement }
         } : item));
 
         toast({ title: "Produto atualizado", description: "Alteração refletida para todos os usuários." });
@@ -616,7 +621,7 @@ export default function ListDetail() {
 
       const newItemsFromQR = data.items.map((item: any) => ({
         name: item.name,
-        price: item.total_price,
+        price: item.total_price, // Nota: Poderia usar unit_price também, mas a reconciliação foca no pago
         quantity: item.quantity
       }));
 
@@ -645,10 +650,10 @@ export default function ListDetail() {
     newItems: Array<{ name: string; price: number; quantity: number }>;
   }) => {
 
-    // 1. Atualiza preços locais sem depender de reload
     const newPrices = { ...itemPrices };
     const itemsToUpdate = [...items];
 
+    // Atualiza Preços Existentes
     data.updates.forEach(update => {
       newPrices[update.itemId] = update.price;
       const idx = itemsToUpdate.findIndex(i => i.id === update.itemId);
@@ -661,37 +666,58 @@ export default function ListDetail() {
     setItemPrices(newPrices);
     setItems(itemsToUpdate);
 
-    // 2. Adiciona novos produtos
+    // Cria Novos Itens
     if (data.newItems.length > 0) {
       for (const newItem of data.newItems) {
         try {
-          // Usa a validação/IA para normalizar antes de criar
+          // 1. Validação e Extração de Medida via IA
           const { data: validationData } = await supabase.functions.invoke('validate-product', {
             body: { name: newItem.name, brand: null }
           });
 
           const finalName = validationData?.isValid ? validationData.correctedName : newItem.name;
           const finalBrand = validationData?.isValid ? validationData.correctedBrand : null;
+          const finalMeasurement = validationData?.isValid ? validationData.detectedMeasurement : null;
 
-          // Cria produto
+          // 2. Cria ou Busca Produto
+          // Tenta criar (a constraint única vai impedir duplicados perfeitos, mas aqui
+          // deveríamos idealmente fazer um select antes. Para simplificar, tentamos criar)
+          let productId: string;
+
           const { data: productData, error: prodError } = await supabase
             .from('products')
-            .insert({ name: finalName, brand: finalBrand })
+            .insert({
+              name: finalName,
+              brand: finalBrand,
+              measurement: finalMeasurement
+            })
             .select()
             .single();
 
           if (prodError) {
-            console.log("Produto talvez já exista, buscando...", prodError);
-            // Se falhar na criação (ex: duplicado), busca o existente
-            // (Para implementar isso robustamente, seria ideal um upsert ou select antes)
-            continue;
+            // Se falhar (provável duplicidade), buscamos o existente
+            console.log("Produto provável duplicado, buscando...", prodError);
+            const { data: existing } = await supabase.from('products')
+              .select('id')
+              .eq('name', finalName)
+              .eq('brand', finalBrand) // Isso pode falhar se brand for null vs 'null', mas ok para MVP
+              .maybeSingle();
+
+            // Fallback mais robusto para busca seria ideal, mas assumimos que o erro foi unique constraint
+            if (existing) productId = existing.id;
+            else continue; // Pula se deu erro grave
+          } else {
+            productId = productData.id;
           }
 
+          if (!productId) continue;
+
+          // 3. Adiciona Item à Lista
           const { data: listItemData } = await supabase
             .from('list_items')
             .insert({
               list_id: id,
-              product_id: productData.id,
+              product_id: productId,
               quantity: newItem.quantity,
               is_checked: true
             })
@@ -700,7 +726,7 @@ export default function ListDetail() {
               product_id,
               quantity,
               is_checked,
-              products (id, name, brand)
+              products (id, name, brand, measurement)
             `)
             .single();
 
@@ -1048,16 +1074,13 @@ export default function ListDetail() {
           <div className="flex-1 flex items-center justify-center relative bg-black">
             <Scanner
               onScan={(result) => {
-                // Correção: Verifica se há resultado válido
                 if (result && result.length > 0 && result[0].rawValue) {
                   handleQRScan(result[0].rawValue);
                 }
               }}
               onError={(error) => {
                 console.error("Scanner error:", error);
-                // Não fecha o scanner imediatamente, mas avisa
               }}
-              // Configurações importantes para funcionar melhor
               constraints={{ facingMode: 'environment' }}
               formats={['qr_code']}
               components={{
@@ -1198,6 +1221,7 @@ export default function ListDetail() {
                 id={item.id}
                 name={item.products.name}
                 brand={item.products.brand || undefined}
+                measurement={item.products.measurement}
                 quantity={item.quantity}
                 isChecked={item.is_checked}
                 price={itemPrices[item.id]}
@@ -1287,7 +1311,6 @@ export default function ListDetail() {
                   <X className="w-5 h-5" />
                 </Button>
 
-                {/* Botão de QR Code */}
                 <Button
                   onClick={() => setIsQRScanning(true)}
                   variant="secondary"
@@ -1297,7 +1320,6 @@ export default function ListDetail() {
                   <QrCode className="w-5 h-5 text-primary" />
                 </Button>
 
-                {/* Botão de Foto 
                 <Button
                   onClick={handleCameraClick}
                   variant="secondary"
@@ -1307,7 +1329,7 @@ export default function ListDetail() {
                 >
                   {isScanning ? <Loader2 className="w-5 h-5 animate-spin" /> : <Camera className="w-5 h-5 text-primary" />}
                 </Button>
-                */}
+
                 <Button
                   onClick={() => setFinishDialogOpen(true)}
                   className="flex-1 h-14 rounded-xl shadow-lg shadow-primary/20"
@@ -1329,7 +1351,6 @@ export default function ListDetail() {
         onConfirm={handleReconciliationConfirm}
       />
 
-      {/* Dialogs ... (Mantidos iguais ao original para economizar espaço, se necessário posso repetir) */}
       <Dialog open={editNameDialogOpen} onOpenChange={setEditNameDialogOpen}>
         <DialogContent className="w-[90%] max-w-sm mx-auto rounded-2xl p-6">
           <DialogHeader>

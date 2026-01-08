@@ -7,7 +7,6 @@ const corsHeaders = {
 };
 
 serve(async (req) => {
-    // Handle CORS preflight requests
     if (req.method === 'OPTIONS') {
         return new Response('ok', { headers: corsHeaders });
     }
@@ -21,11 +20,13 @@ serve(async (req) => {
 
         console.log(`Fetching NFC-e: ${url}`);
 
-        // Simulamos um User-Agent de iPhone para garantir que o site da Fazenda retorne
-        // a versão mobile simplificada (que é mais fácil de ler e tem menos bloqueios)
-        const response = await fetch(url, {
+        // Tratamento de URL com pipes
+        const safeUrl = url.includes('|') ? encodeURI(url) : url;
+
+        const response = await fetch(safeUrl, {
             headers: {
-                "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1"
+                "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8"
             }
         });
 
@@ -37,62 +38,74 @@ serve(async (req) => {
         const $ = cheerio.load(html);
         const items: any[] = [];
 
-        // Lógica de Extração (Scraping)
-        // Tenta encontrar linhas de tabela. O layout padrão da NFC-e costuma usar <tr> com classes específicas.
-        // Adaptado para layouts comuns da SEFAZ (SP, RJ, etc.)
+        // --- Estratégia de Scraping Atualizada ---
 
+        // Padrão SEFAZ (tabela com ID tabResult ou linhas tr genéricas)
         $('tr').each((i, el) => {
-            // 1. Nome do Produto (Geralmente na classe .txtTit ou .txtTit2)
-            const name = $(el).find('.txtTit, .txtTit2').first().text().trim();
+            const $el = $(el);
 
-            // 2. Código do Produto (Geralmente na classe .RCod)
-            const code = $(el).find('.RCod').text().replace('(Código:', '').replace(')', '').trim();
+            // 1. Nome do Produto (busca nas classes comuns)
+            const name = $el.find('.txtTit, .txtTit2, h4, .truncate').first().text().trim();
 
-            // 3. Quantidade (Geralmente na classe .Rqtd)
-            const qtdText = $(el).find('.Rqtd').text().replace('Qtde.:', '').trim();
+            // 2. Código (se houver)
+            const code = $el.find('.RCod').text().replace('(Código:', '').replace(')', '').trim();
+
+            // 3. Quantidade
+            // Geralmente aparece como "Qtde.: 2"
+            const qtdText = $el.find('.Rqtd').text().replace('Qtde.:', '').trim();
             const quantity = parseFloat(qtdText.replace(',', '.')) || 1;
 
-            // 4. Unidade (UN, KG, etc)
-            const unit = $(el).find('.RUN').text().replace('UN:', '').trim();
+            // 4. Unidade Comercial (UN, KG, CX)
+            const unit = $el.find('.RUN').text().replace('UN:', '').trim();
 
-            // 5. Valor Total do Item (Geralmente na classe .Valor)
-            const valText = $(el).find('.Valor').text().trim();
-            // Remove "R$" e espaços, converte vírgula para ponto
-            const totalPrice = parseFloat(valText.replace(/[^0-9,]/g, '').replace(',', '.'));
+            // 5. Valor Total do Item
+            const valTotalText = $el.find('.Valor').text().trim();
+            const totalPrice = parseFloat(valTotalText.replace(/[^0-9,]/g, '').replace(',', '.'));
 
-            // Validamos se encontrou pelo menos nome e preço
+            // 6. Valor Unitário (O PULO DO GATO)
+            // Procura especificamente o campo "Vl. Unit."
+            let unitPrice = 0;
+            const valUnitText = $el.find('.RvlUnit').text().replace('Vl. Unit.:', '').trim();
+
+            if (valUnitText) {
+                unitPrice = parseFloat(valUnitText.replace(/[^0-9,]/g, '').replace(',', '.'));
+            } else {
+                // Fallback: Se não achar o campo unitário explícito, calcula
+                unitPrice = quantity > 0 ? (totalPrice / quantity) : totalPrice;
+            }
+
             if (name && !isNaN(totalPrice)) {
-                // Cálculo do unitário se não estiver explícito na linha
-                const unitPrice = quantity > 0 ? (totalPrice / quantity) : totalPrice;
-
                 items.push({
-                    name: name,
+                    name: name, // Mandamos o nome BRUTO (Ex: BATATA PALHA YOKI 500G) para a IA tratar depois
                     quantity: quantity,
                     unit: unit,
-                    total_price: totalPrice, // Valor total pago pelo item (importante para o app)
-                    unit_price: unitPrice,
+                    total_price: totalPrice,
+                    unit_price: unitPrice, // Agora temos o preço unitário exato da nota
                     code: code
                 });
             }
         });
 
-        // Fallback: Se a lógica acima não encontrar nada, tenta um seletor mais genérico
-        // para tabelas antigas (id="tabResult")
+        // Fallback para layouts antigos (tabela simples)
         if (items.length === 0) {
             $('table#tabResult tr').each((i, el) => {
                 const tds = $(el).find('td');
-                // Assume estrutura: Nome | ... | Valor
-                const name = $(tds[0]).find('span.txtTit').text().trim();
-                const val = $(tds[1]).find('span.valor').text().trim();
+                if (tds.length >= 2) {
+                    const name = $(tds[0]).text().trim();
+                    const val = $(tds[1]).text().trim(); // Valor Total
 
-                if (name && val) {
-                    const price = parseFloat(val.replace(',', '.')) || 0;
-                    items.push({
-                        name,
-                        total_price: price,
-                        quantity: 1,
-                        unit_price: price
-                    });
+                    // Tenta achar unitário em colunas extras se existirem, senão calcula
+                    if (name && val && val.includes(',')) {
+                        const price = parseFloat(val.replace('.', '').replace(',', '.'));
+                        if (!isNaN(price)) {
+                            items.push({
+                                name,
+                                total_price: price,
+                                quantity: 1,
+                                unit_price: price // Assume 1 se não achar qtde
+                            });
+                        }
+                    }
                 }
             });
         }

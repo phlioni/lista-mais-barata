@@ -16,29 +16,28 @@ serve(async (req) => {
     try {
         const { name, brand } = await req.json();
 
-        if (!name) {
-            throw new Error('Nome do produto é obrigatório');
-        }
+        if (!name) throw new Error('Nome do produto é obrigatório');
 
-        // Prompt para a IA normalizar imediatamente
         const systemPrompt = `
-      Você é um validador de dados de supermercado.
-      Sua função é corrigir ortografia e separar Marca de Produto.
+      Você é um especialista em produtos de supermercado.
+      Sua tarefa é normalizar o nome do produto e EXTRAIR metadados.
 
       ENTRADA: Nome: "${name}", Marca Sugerida: "${brand || ''}"
 
       REGRAS:
-      1. Se o nome contiver a marca (ex: "MACA FUJI"), separe: Nome="Macarrão", Marca="Fuji".
-      2. Corrija abreviações (ex: "MACA" -> "Macarrão", "LEIT" -> "Leite", "SAB" -> "Sabão").
-      3. Use Title Case (iniciais maiúsculas).
-      4. Se o produto parecer inválido/nonsense, marque isValid: false.
+      1. Extraia o NOME PRINCIPAL (ex: "Batata Palha", "Coca-Cola").
+      2. Extraia a MARCA se estiver no nome (ex: "Yoki", "Nestlé").
+      3. Extraia a MEDIDA/PESO se houver (ex: "500g", "1kg", "2L", "350ml", "Unitario").
+         - Se não houver medida explícita, retorne null.
+      4. Corrija ortografia e use Title Case.
 
       SAÍDA (JSON):
       {
         "isValid": boolean,
-        "correctedName": "string",
+        "correctedName": "string (apenas o nome do produto)",
         "correctedBrand": "string | null",
-        "reason": "string (apenas se inválido)"
+        "detectedMeasurement": "string | null (ex: '500g')",
+        "reason": "string (se inválido)"
       }
     `;
 
@@ -49,7 +48,7 @@ serve(async (req) => {
                 'Content-Type': 'application/json',
             },
             body: JSON.stringify({
-                model: 'gpt-4o-mini', // Rápido e barato para rodar em tempo real
+                model: 'gpt-4o-mini',
                 messages: [
                     { role: 'system', content: systemPrompt }
                 ],
