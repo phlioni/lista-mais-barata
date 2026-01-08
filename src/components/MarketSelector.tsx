@@ -1,4 +1,3 @@
-// src/components/MarketSelector.tsx
 import { useState, useEffect } from "react";
 import { Check, MapPin, Search, Store, X, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -35,7 +34,6 @@ export function MarketSelector({ selectedMarket, onSelectMarket }: MarketSelecto
   const navigate = useNavigate();
   const location = useLocation();
 
-  // Carrega os mercados apenas quando o modal é aberto para economizar recursos
   useEffect(() => {
     if (open && markets.length === 0) {
       fetchMarkets();
@@ -70,9 +68,16 @@ export function MarketSelector({ selectedMarket, onSelectMarket }: MarketSelecto
 
   const handleCreateNew = () => {
     setOpen(false);
-    // Salva a rota atual para retornar após o cadastro
     const returnUrl = encodeURIComponent(location.pathname + location.search);
     navigate(`/mercados/novo?returnTo=${returnUrl}`);
+  };
+
+  // Função auxiliar para formatar a exibição "Nome - Endereço"
+  const getMarketDisplayName = (market: Market) => {
+    if (!market.address) return market.name;
+    // Pega apenas a primeira parte do endereço (Rua X) se for muito longo, ou exibe tudo
+    // Aqui optei por exibir tudo mas controlando com CSS truncate
+    return `${market.name} - ${market.address}`;
   };
 
   return (
@@ -84,18 +89,18 @@ export function MarketSelector({ selectedMarket, onSelectMarket }: MarketSelecto
           aria-expanded={open}
           className="w-full justify-between h-14 px-4 rounded-xl border-border bg-card hover:bg-accent/50 group"
         >
-          <div className="flex items-center gap-3 overflow-hidden">
+          <div className="flex items-center gap-3 overflow-hidden w-full">
             <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center flex-shrink-0 group-hover:bg-primary/20 transition-colors">
               <Store className="w-4 h-4 text-primary" />
             </div>
-            <div className="flex flex-col items-start truncate">
+            <div className="flex flex-col items-start truncate flex-1 min-w-0">
               <span className="text-xs text-muted-foreground font-medium">Mercado selecionado</span>
-              <span className="text-sm font-semibold truncate text-foreground">
-                {selectedMarket ? selectedMarket.name : "Selecione um mercado..."}
+              <span className="text-sm font-semibold truncate w-full text-left text-foreground">
+                {selectedMarket ? getMarketDisplayName(selectedMarket) : "Selecione um mercado..."}
               </span>
             </div>
           </div>
-          <Search className="w-4 h-4 text-muted-foreground opacity-50 shrink-0" />
+          <Search className="w-4 h-4 text-muted-foreground opacity-50 shrink-0 ml-2" />
         </Button>
       </DialogTrigger>
 
@@ -150,13 +155,15 @@ export function MarketSelector({ selectedMarket, onSelectMarket }: MarketSelecto
                   )} />
                   <div className="flex-1 min-w-0">
                     <p className={cn(
-                      "font-medium leading-none mb-1.5",
+                      "font-medium leading-tight",
                       selectedMarket?.id === market.id ? "text-primary" : "text-foreground"
                     )}>
                       {market.name}
-                    </p>
-                    <p className="text-xs text-muted-foreground leading-snug line-clamp-2">
-                      {market.address || "Endereço não cadastrado"}
+                      {market.address && (
+                        <span className="font-normal text-muted-foreground ml-1">
+                          - {market.address}
+                        </span>
+                      )}
                     </p>
                   </div>
                   {selectedMarket?.id === market.id && (
@@ -168,7 +175,6 @@ export function MarketSelector({ selectedMarket, onSelectMarket }: MarketSelecto
           )}
         </ScrollArea>
 
-        {/* Rodapé fixo com o botão de criar */}
         <div className="p-4 border-t border-border bg-background z-10">
           <Button
             variant="secondary"

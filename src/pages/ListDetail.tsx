@@ -3,7 +3,7 @@ import { useParams, useNavigate, useSearchParams } from "react-router-dom";
 import {
   ArrowLeft, Plus, Search, Scale, Loader2, X, ShoppingCart,
   Check, Store, Copy, Lock, MoreVertical, Pencil, Trash2,
-  AlertTriangle, Save, Camera
+  AlertTriangle, Save, Camera, QrCode
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -40,6 +40,7 @@ import {
 import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
 import { ReceiptReconciliation, ScanResult } from "@/components/ReceiptReconciliation";
+import { Scanner } from '@yudiel/react-qr-scanner';
 
 interface Product {
   id: string;
@@ -128,6 +129,9 @@ export default function ListDetail() {
   const [isScanning, setIsScanning] = useState(false);
   const [scanResult, setScanResult] = useState<ScanResult | null>(null);
   const [showReconciliation, setShowReconciliation] = useState(false);
+
+  // QR Code States
+  const [isQRScanning, setIsQRScanning] = useState(false);
 
   useEffect(() => {
     if (!authLoading && !user) {
@@ -285,7 +289,6 @@ export default function ListDetail() {
           }
         }
       } else {
-        // CORREÇÃO: Não zera preços se já existirem (ex: via OCR)
         setItemPrices(prev => {
           if (Object.keys(prev).length === 0) return {};
           return prev;
@@ -530,7 +533,7 @@ export default function ListDetail() {
     setEditingProductData({ id: product.id, name: product.name, brand: product.brand || '' });
   };
 
-  // --- SCANNER LOGIC ---
+  // --- SCANNER LOGIC (PHOTO) ---
 
   const handleCameraClick = () => {
     fileInputRef.current?.click();
@@ -582,6 +585,68 @@ export default function ListDetail() {
     }
   };
 
+  // --- QR CODE LOGIC ---
+  const handleQRScan = async (result: string) => {
+    if (!result) return;
+
+    // Evita leituras múltiplas
+    setIsQRScanning(false);
+
+    // Reutilizamos o loading da câmera para feedback visual nos botões inferiores, se quiser
+    // Mas como o modal fecha, é melhor usar um toast de loading
+    toast({ title: "Processando...", description: "Consultando nota fiscal..." });
+    setIsScanning(true);
+
+    try {
+      const { data, error } = await supabase.functions.invoke('scrape-nfce', {
+        body: { url: result }
+      });
+
+      if (error) throw error;
+      if (!data.success) throw new Error(data.error || "Falha na leitura");
+
+      console.log("Itens NFC-e:", data.items);
+
+      if (data.items.length === 0) {
+        toast({
+          title: "Nenhum item encontrado",
+          description: "Não conseguimos ler os itens desta nota.",
+          variant: "destructive"
+        });
+        return;
+      }
+
+      // Convertemos o resultado do scrape para o formato do ReceiptReconciliation
+      // Como não temos matching inteligente no scrape (apenas nome exato),
+      // jogamos tudo para 'new_items' e o usuário confirma/associa se necessário.
+      // Futuramente, poderíamos adicionar um matching local simples aqui.
+
+      const newItemsFromQR = data.items.map((item: any) => ({
+        name: item.name,
+        price: item.total_price,
+        quantity: item.quantity
+      }));
+
+      setScanResult({
+        matched: [],
+        review_needed: [],
+        new_items: newItemsFromQR
+      });
+
+      setShowReconciliation(true);
+
+    } catch (error) {
+      console.error("Erro QR Code:", error);
+      toast({
+        title: "Erro ao consultar nota",
+        description: "Verifique a validade do QR Code ou tente por foto.",
+        variant: "destructive"
+      });
+    } finally {
+      setIsScanning(false);
+    }
+  };
+
   const handleReconciliationConfirm = async (data: {
     updates: Array<{ itemId: string; price: number }>;
     newItems: Array<{ name: string; price: number; quantity: number }>;
@@ -607,6 +672,8 @@ export default function ListDetail() {
     if (data.newItems.length > 0) {
       for (const newItem of data.newItems) {
         try {
+          // Primeiro tenta achar produto existente com nome similar para evitar duplicidade
+          // (Opcional, mas recomendado. Aqui vamos criar direto por simplicidade ou usar a lógica existente)
           const { data: productData, error: prodError } = await supabase
             .from('products')
             .insert({ name: newItem.name })
@@ -757,7 +824,6 @@ export default function ListDetail() {
       await loadMarketData(selectedMarket.id, true, shouldLoadPrices);
 
       if (!shouldLoadPrices) {
-        // CORREÇÃO: Não limpa preços se já houver (OCR)
         setItemPrices(prev => {
           if (Object.keys(prev).length === 0) return {};
           return prev;
@@ -952,7 +1018,6 @@ export default function ListDetail() {
   }
 
   return (
-    // CORREÇÃO: Padding dinâmico para garantir que o último item apareça acima do footer
     <div className={cn("min-h-screen bg-background transition-all", items.length > 0 ? "pb-40" : "pb-8")}>
       <input
         type="file"
@@ -962,6 +1027,34 @@ export default function ListDetail() {
         ref={fileInputRef}
         onChange={handleFileUpload}
       />
+
+      {/* QR Scanner Overlay */}
+      {isQRScanning && (
+        <div className="fixed inset-0 z-50 bg-black flex flex-col">
+          <div className="p-4 flex justify-between items-center text-white bg-black/50 absolute top-0 w-full z-10">
+            <h3 className="font-bold">Aponte para o QR Code</h3>
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => setIsQRScanning(false)}
+              className="text-white hover:bg-white/20"
+            >
+              <X className="w-6 h-6" />
+            </Button>
+          </div>
+
+          <div className="flex-1 flex items-center justify-center relative bg-black">
+            <Scanner
+              onScan={(result) => {
+                if (result && result[0]) {
+                  handleQRScan(result[0].rawValue);
+                }
+              }}
+              classNames={{ container: "w-full h-full" }}
+            />
+          </div>
+        </div>
+      )}
 
       <header className="sticky top-0 z-40 bg-background/90 backdrop-blur-lg border-b border-border transition-all">
         <div className="flex items-center gap-2 px-4 py-3 max-w-md mx-auto">
@@ -1178,14 +1271,27 @@ export default function ListDetail() {
                   <X className="w-5 h-5" />
                 </Button>
 
+                {/* Botão de QR Code */}
+                <Button
+                  onClick={() => setIsQRScanning(true)}
+                  variant="secondary"
+                  className="w-14 shrink-0 h-14 rounded-xl border border-primary/20"
+                  title="Escanear QR Code NFC-e"
+                >
+                  <QrCode className="w-5 h-5 text-primary" />
+                </Button>
+
+                {/* Botão de Foto 
                 <Button
                   onClick={handleCameraClick}
                   variant="secondary"
                   className="w-14 shrink-0 h-14 rounded-xl border border-primary/20"
                   disabled={isScanning}
+                  title="Tirar Foto da Nota"
                 >
                   {isScanning ? <Loader2 className="w-5 h-5 animate-spin" /> : <Camera className="w-5 h-5 text-primary" />}
                 </Button>
+                */}
 
                 <Button
                   onClick={() => setFinishDialogOpen(true)}
