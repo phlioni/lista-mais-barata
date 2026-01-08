@@ -1,15 +1,13 @@
-// src/pages/CreateMarket.tsx
 import { useState, useEffect } from "react";
 import { ArrowLeft, MapPin, Loader2, Save } from "lucide-react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { MapSelector } from "@/components/MapSelector"; // Importação alterada
+import { MapSelector } from "@/components/MapSelector";
 import { useAuth } from "@/hooks/useAuth";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { getAddressFromCoordinates } from "@/lib/geocoding";
-// import { cn } from "@/lib/utils"; // (Opcional: descomente se precisar usar cn diretamente neste arquivo)
 
 export default function CreateMarket() {
     const navigate = useNavigate();
@@ -59,9 +57,29 @@ export default function CreateMarket() {
 
         setCreating(true);
         try {
-            // Fallback para coordenadas se endereço falhar
             const addressToSave = fetchedAddress || `${selectedLocation.lat.toFixed(6)}, ${selectedLocation.lng.toFixed(6)}`;
 
+            // 1. Verificação de Duplicidade
+            // Verificamos se já existe algum mercado com este exato endereço
+            const { data: existingMarket, error: checkError } = await supabase
+                .from("markets")
+                .select("id, name")
+                .eq("address", addressToSave)
+                .maybeSingle();
+
+            if (checkError) throw checkError;
+
+            if (existingMarket) {
+                toast({
+                    title: "Mercado já existe",
+                    description: `O mercado "${existingMarket.name}" já está cadastrado neste endereço.`,
+                    variant: "destructive",
+                });
+                setCreating(false);
+                return;
+            }
+
+            // 2. Criação do Mercado
             const { error } = await supabase
                 .from("markets")
                 .insert({
@@ -78,7 +96,6 @@ export default function CreateMarket() {
                 description: "Mercado cadastrado com sucesso",
             });
 
-            // Volta para a página anterior ou para a lista de mercados
             if (returnTo) {
                 navigate(returnTo);
             } else {
@@ -110,7 +127,7 @@ export default function CreateMarket() {
 
             {/* Conteúdo Principal */}
             <div className="flex-1 flex flex-col relative">
-                {/* Input de Nome (Flutuante ou no topo) */}
+                {/* Input de Nome */}
                 <div className="p-4 bg-background z-10">
                     <label className="text-sm font-medium text-muted-foreground mb-1.5 block">
                         Nome do estabelecimento
@@ -124,7 +141,7 @@ export default function CreateMarket() {
                     />
                 </div>
 
-                {/* Mapa (Ocupa o resto da tela) */}
+                {/* Mapa */}
                 <div className="flex-1 relative min-h-[300px] bg-muted/20">
                     <MapSelector
                         onLocationSelect={(lat, lng) => setSelectedLocation({ lat, lng })}
@@ -132,7 +149,6 @@ export default function CreateMarket() {
                         className="absolute inset-0 w-full h-full"
                     />
 
-                    {/* Aviso sobre o mapa */}
                     {!selectedLocation && (
                         <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-background/90 backdrop-blur px-4 py-2 rounded-full shadow-lg border border-border/50 pointer-events-none z-10">
                             <p className="text-xs font-medium text-foreground flex items-center gap-2">
@@ -143,7 +159,7 @@ export default function CreateMarket() {
                     )}
                 </div>
 
-                {/* Painel Inferior (Endereço + Botão) */}
+                {/* Painel Inferior */}
                 <div className="bg-background border-t border-border p-4 pb-safe shadow-[0_-4px_20px_rgba(0,0,0,0.05)] z-20">
                     {selectedLocation && (
                         <div className="mb-4 p-3 bg-secondary/30 rounded-xl border border-border/50">
