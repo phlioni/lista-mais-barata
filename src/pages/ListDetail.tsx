@@ -42,7 +42,6 @@ import { cn } from "@/lib/utils";
 import { ReceiptReconciliation, ScanResult } from "@/components/ReceiptReconciliation";
 import { Scanner } from '@yudiel/react-qr-scanner';
 
-// Interface atualizada com measurement
 interface Product {
   id: string;
   name: string;
@@ -454,7 +453,6 @@ export default function ListDetail() {
 
       const correctedName = validationData.correctedName;
       const correctedBrand = validationData.correctedBrand || null;
-      // IA pode inferir medida do nome na criação manual
       const correctedMeasurement = validationData.detectedMeasurement || null;
 
       let duplicateQuery = supabase.from('products')
@@ -590,38 +588,46 @@ export default function ListDetail() {
     }
   };
 
-  // --- QR CODE LOGIC ---
+  // --- QR CODE LOGIC (CORRIGIDA) ---
   const handleQRScan = async (result: string) => {
     if (!result) return;
+
+    // Validação básica
+    if (!result.startsWith('http')) {
+      toast({
+        title: "QR Code Inválido",
+        description: "Não parece ser um link de nota fiscal.",
+        variant: "destructive"
+      });
+      setIsQRScanning(false);
+      return;
+    }
 
     setIsQRScanning(false);
     setIsScanning(true);
     toast({ title: "Processando...", description: "Consultando nota fiscal..." });
 
-    console.log("QR Code detectado:", result);
-
     try {
       const { data, error } = await supabase.functions.invoke('scrape-nfce', {
-        body: { url: result }
+        body: { url: result.trim() }
       });
 
       if (error) throw error;
       if (!data.success) throw new Error(data.error || "Falha na leitura");
 
-      console.log("Itens NFC-e:", data.items);
-
       if (data.items.length === 0) {
         toast({
           title: "Nenhum item encontrado",
-          description: "Não conseguimos ler os itens desta nota. Tente pela foto.",
+          description: "Acessamos a nota, mas o layout pode ser incompatível.",
           variant: "destructive"
         });
         return;
       }
 
+      // FIX CRÍTICO: Mapeamos explicitamente 'unit_price' para 'price'
       const newItemsFromQR = data.items.map((item: any) => ({
         name: item.name,
-        price: item.total_price, // Nota: Poderia usar unit_price também, mas a reconciliação foca no pago
+        price: item.unit_price, // Usamos o unitário, jamais o total
         quantity: item.quantity
       }));
 
@@ -633,11 +639,15 @@ export default function ListDetail() {
 
       setShowReconciliation(true);
 
-    } catch (error) {
+    } catch (error: any) {
       console.error("Erro QR Code:", error);
+      const msg = error.message?.includes('Acesso negado')
+        ? "A SEFAZ bloqueou o acesso automático."
+        : "Não foi possível ler a nota.";
+
       toast({
-        title: "Erro ao consultar nota",
-        description: "Tente novamente ou use a opção de foto.",
+        title: "Erro ao ler nota",
+        description: `${msg} Tente usar a foto.`,
         variant: "destructive"
       });
     } finally {
@@ -653,7 +663,7 @@ export default function ListDetail() {
     const newPrices = { ...itemPrices };
     const itemsToUpdate = [...items];
 
-    // Atualiza Preços Existentes
+    // Atualiza itens existentes
     data.updates.forEach(update => {
       newPrices[update.itemId] = update.price;
       const idx = itemsToUpdate.findIndex(i => i.id === update.itemId);
@@ -666,11 +676,11 @@ export default function ListDetail() {
     setItemPrices(newPrices);
     setItems(itemsToUpdate);
 
-    // Cria Novos Itens
+    // Cria novos itens
     if (data.newItems.length > 0) {
       for (const newItem of data.newItems) {
         try {
-          // 1. Validação e Extração de Medida via IA
+          // IA Normaliza e extrai medida
           const { data: validationData } = await supabase.functions.invoke('validate-product', {
             body: { name: newItem.name, brand: null }
           });
@@ -679,9 +689,7 @@ export default function ListDetail() {
           const finalBrand = validationData?.isValid ? validationData.correctedBrand : null;
           const finalMeasurement = validationData?.isValid ? validationData.detectedMeasurement : null;
 
-          // 2. Cria ou Busca Produto
-          // Tenta criar (a constraint única vai impedir duplicados perfeitos, mas aqui
-          // deveríamos idealmente fazer um select antes. Para simplificar, tentamos criar)
+          // Cria ou Busca Produto
           let productId: string;
 
           const { data: productData, error: prodError } = await supabase
@@ -695,24 +703,22 @@ export default function ListDetail() {
             .single();
 
           if (prodError) {
-            // Se falhar (provável duplicidade), buscamos o existente
-            console.log("Produto provável duplicado, buscando...", prodError);
+            // Se duplicado, busca o existente
             const { data: existing } = await supabase.from('products')
               .select('id')
               .eq('name', finalName)
-              .eq('brand', finalBrand) // Isso pode falhar se brand for null vs 'null', mas ok para MVP
+              .eq('brand', finalBrand) // Simplificação (ideal tratar nulls)
               .maybeSingle();
 
-            // Fallback mais robusto para busca seria ideal, mas assumimos que o erro foi unique constraint
             if (existing) productId = existing.id;
-            else continue; // Pula se deu erro grave
+            else continue;
           } else {
             productId = productData.id;
           }
 
           if (!productId) continue;
 
-          // 3. Adiciona Item à Lista
+          // Adiciona item à lista
           const { data: listItemData } = await supabase
             .from('list_items')
             .insert({
@@ -1319,7 +1325,7 @@ export default function ListDetail() {
                 >
                   <QrCode className="w-5 h-5 text-primary" />
                 </Button>
-
+                {/*
                 <Button
                   onClick={handleCameraClick}
                   variant="secondary"
@@ -1329,7 +1335,7 @@ export default function ListDetail() {
                 >
                   {isScanning ? <Loader2 className="w-5 h-5 animate-spin" /> : <Camera className="w-5 h-5 text-primary" />}
                 </Button>
-
+                  */}
                 <Button
                   onClick={() => setFinishDialogOpen(true)}
                   className="flex-1 h-14 rounded-xl shadow-lg shadow-primary/20"
