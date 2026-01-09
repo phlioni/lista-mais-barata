@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { useParams, useNavigate, useSearchParams } from "react-router-dom";
 import {
   ArrowLeft,
@@ -160,7 +160,8 @@ export default function ListDetail() {
     id?: string;
     name: string;
     brand: string;
-  }>({ name: "", brand: "" });
+    measurement: string; // Adicionado campo de medida
+  }>({ name: "", brand: "", measurement: "" });
   const [validatingProduct, setValidatingProduct] = useState(false);
 
   const [isShoppingMode, setIsShoppingMode] = useState(false);
@@ -249,6 +250,34 @@ export default function ListDetail() {
       loadMarketData(preselectedMarketId, true, true);
     }
   }, [preselectedMarketId, usePrices, list, routeMarketId]);
+
+  // ORDENAÇÃO INTELIGENTE (Prioriza itens com preço)
+  const sortedItems = useMemo(() => {
+    // Se não tiver preço carregado ou não estiver em modo de compra/comparação, mantem ordem de criação
+    const hasAnyPrice = Object.keys(itemPrices).length > 0;
+
+    // Clona para não mutar o state original
+    const itemsCopy = [...items];
+
+    if (hasAnyPrice || isShoppingMode || isCompareMode) {
+      return itemsCopy.sort((a, b) => {
+        const priceA = itemPrices[a.id] || 0;
+        const priceB = itemPrices[b.id] || 0;
+        const hasPriceA = priceA > 0;
+        const hasPriceB = priceB > 0;
+
+        // 1. Quem tem preço vem primeiro
+        if (hasPriceA && !hasPriceB) return -1;
+        if (!hasPriceA && hasPriceB) return 1;
+
+        // 2. Desempate alfabético
+        return a.products.name.localeCompare(b.products.name);
+      });
+    }
+
+    // Se não estiver comprando, ordem original (criação)
+    return itemsCopy;
+  }, [items, itemPrices, isShoppingMode, isCompareMode]);
 
   const fetchListData = async () => {
     if (!id) return;
@@ -528,13 +557,15 @@ export default function ListDetail() {
 
       const correctedName = validationData.correctedName;
       const correctedBrand = validationData.correctedBrand || null;
-      const correctedMeasurement = validationData.detectedMeasurement || null;
+      // Prioriza a medida digitada manualmente, se não tiver, usa a da IA
+      const manualMeasurement = editingProductData.measurement?.trim() || null;
+      const finalMeasurement = manualMeasurement || validationData.detectedMeasurement || null;
 
       let duplicateQuery = supabase
         .from("products")
         .select("*")
         .ilike("name", correctedName)
-        .is("measurement", correctedMeasurement ? correctedMeasurement : null);
+        .is("measurement", finalMeasurement ? finalMeasurement : null);
 
       if (correctedBrand) {
         duplicateQuery = duplicateQuery.eq("brand", correctedBrand);
@@ -566,7 +597,7 @@ export default function ListDetail() {
           .insert({
             name: correctedName,
             brand: correctedBrand,
-            measurement: correctedMeasurement,
+            measurement: finalMeasurement,
           })
           .select()
           .single();
@@ -586,7 +617,7 @@ export default function ListDetail() {
           .update({
             name: correctedName,
             brand: correctedBrand,
-            measurement: correctedMeasurement,
+            measurement: finalMeasurement,
           })
           .eq("id", editingProductData.id);
 
@@ -599,7 +630,7 @@ export default function ListDetail() {
                 ...p,
                 name: correctedName,
                 brand: correctedBrand,
-                measurement: correctedMeasurement,
+                measurement: finalMeasurement,
               }
               : p
           )
@@ -613,7 +644,7 @@ export default function ListDetail() {
                   ...item.products,
                   name: correctedName,
                   brand: correctedBrand,
-                  measurement: correctedMeasurement,
+                  measurement: finalMeasurement,
                 },
               }
               : item
@@ -627,7 +658,7 @@ export default function ListDetail() {
       }
 
       setIsProductMode(null);
-      setEditingProductData({ name: "", brand: "" });
+      setEditingProductData({ name: "", brand: "", measurement: "" });
     } catch (error) {
       console.error("Error saving product:", error);
       toast({
@@ -642,7 +673,7 @@ export default function ListDetail() {
 
   const startCreateProduct = () => {
     setIsProductMode("create");
-    setEditingProductData({ name: searchQuery, brand: "" });
+    setEditingProductData({ name: searchQuery, brand: "", measurement: "" });
   };
 
   const startEditProduct = (product: Product, e: React.MouseEvent) => {
@@ -652,6 +683,7 @@ export default function ListDetail() {
       id: product.id,
       name: product.name,
       brand: product.brand || "",
+      measurement: product.measurement || "",
     });
   };
 
@@ -737,7 +769,8 @@ export default function ListDetail() {
       if (data.items.length === 0) {
         toast({
           title: "Nenhum item encontrado",
-          description: "Layout incompatível ou captcha.",
+          description:
+            "Acessamos a nota, mas o layout pode ser incompatível.",
           variant: "destructive",
         });
         setProcessingStatus(null);
@@ -749,7 +782,7 @@ export default function ListDetail() {
 
       const newPrices = { ...itemPrices };
       const newItemsAdded: ListItem[] = [];
-      const updatedItems = [...items];
+      // const updatedItems = [...items]; // Não precisa clonar aqui se for usar o setState funcional ou reconstruir no final
 
       // OTIMIZAÇÃO: Processamento em Lotes com Resiliência a Falhas
       const batchSize = 5;
@@ -910,8 +943,6 @@ export default function ListDetail() {
     updates: Array<{ itemId: string; price: number }>;
     newItems: Array<{ name: string; price: number; quantity: number }>;
   }) => {
-    // Este método agora é usado APENAS pelo fluxo de FOTO (scan-receipt)
-    // O fluxo de QR Code tem sua própria lógica otimizada acima.
 
     setProcessingStatus({ current: 0, total: data.newItems.length + data.updates.length, currentItemName: "Atualizando..." });
     const newPrices = { ...itemPrices };
@@ -1504,7 +1535,7 @@ export default function ListDetail() {
               (isClosed || isCompareMode) && "opacity-95"
             )}
           >
-            {items.map((item) => (
+            {sortedItems.map((item) => (
               <ProductItem
                 key={item.id}
                 id={item.id}
@@ -1609,7 +1640,7 @@ export default function ListDetail() {
                 >
                   <QrCode className="w-5 h-5 text-primary" />
                 </Button>
-                {/*
+
                 <Button
                   onClick={handleCameraClick}
                   variant="secondary"
@@ -1623,7 +1654,7 @@ export default function ListDetail() {
                     <Camera className="w-5 h-5 text-primary" />
                   )}
                 </Button>
-                */}
+
                 <Button
                   onClick={() => setFinishDialogOpen(true)}
                   className="flex-1 h-14 rounded-xl shadow-lg shadow-primary/20"
@@ -1808,6 +1839,21 @@ export default function ListDetail() {
                       }))
                     }
                     placeholder="Ex: Tio João"
+                    className="h-12 rounded-xl"
+                  />
+                </div>
+                {/* CAMPO DE MEDIDA ADICIONADO */}
+                <div className="space-y-2">
+                  <Label>Medida (Ex: 500g, 1L)</Label>
+                  <Input
+                    value={editingProductData.measurement}
+                    onChange={(e) =>
+                      setEditingProductData((prev) => ({
+                        ...prev,
+                        measurement: e.target.value,
+                      }))
+                    }
+                    placeholder="Ex: 500g"
                     className="h-12 rounded-xl"
                   />
                 </div>
