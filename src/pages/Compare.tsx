@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { ArrowLeft, MapPin, Loader2, Sparkles } from "lucide-react";
+import { ArrowLeft, MapPin, Loader2, Sparkles, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { RadiusSelector } from "@/components/RadiusSelector";
 import { MarketCard } from "@/components/MarketCard";
@@ -49,44 +49,54 @@ export default function Compare() {
     }
   }, [id]);
 
+  // RESTAURAÇÃO DE ESTADO (Cache da Busca)
   useEffect(() => {
+    // Tenta recuperar do cache ao montar a tela
+    const cachedData = sessionStorage.getItem(`compare-cache-${id}`);
+    if (cachedData) {
+      try {
+        const parsed = JSON.parse(cachedData);
+        setResults(parsed.results);
+        setRadius(parsed.radius);
+        setHasSearched(true);
+        // Se tiver localização salva, usa também, senão tenta pegar de novo
+        if (parsed.userLocation) setUserLocation(parsed.userLocation);
+      } catch (e) {
+        console.error("Erro ao restaurar cache", e);
+      }
+    }
+
+    // Geolocalização (se não tiver no cache ou para atualizar)
     if (navigator.geolocation) {
       navigator.geolocation.getCurrentPosition(
         (position) => {
-          setUserLocation({
+          const newLoc = {
             lat: position.coords.latitude,
             lng: position.coords.longitude,
-          });
+          };
+          setUserLocation(newLoc);
         },
         () => {
-          setUserLocation({ lat: -23.5505, lng: -46.6333 });
+          if (!userLocation) setUserLocation({ lat: -23.5505, lng: -46.6333 });
         }
       );
     } else {
-      setUserLocation({ lat: -23.5505, lng: -46.6333 });
+      if (!userLocation) setUserLocation({ lat: -23.5505, lng: -46.6333 });
     }
-  }, []);
+  }, [id]);
 
-  // Realtime update: Se houver mudança de preços, reexecuta a comparação
+  // SALVAR NO CACHE
   useEffect(() => {
-    if (!hasSearched) return;
-
-    const channel = supabase
-      .channel('compare-realtime')
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'market_prices' },
-        () => {
-          console.log("Preço alterado externamente, recalculando...");
-          compareMarkets(true);
-        }
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, [hasSearched, id, userLocation, radius]);
+    if (hasSearched && results.length > 0 && id) {
+      const cacheData = {
+        results,
+        radius,
+        userLocation,
+        timestamp: Date.now()
+      };
+      sessionStorage.setItem(`compare-cache-${id}`, JSON.stringify(cacheData));
+    }
+  }, [results, radius, userLocation, hasSearched, id]);
 
   const fetchListName = async () => {
     if (!id) return;
@@ -103,6 +113,12 @@ export default function Compare() {
     }
   };
 
+  const handleNewSearch = () => {
+    // Limpa cache explicitamente se o usuário quiser nova busca
+    sessionStorage.removeItem(`compare-cache-${id}`);
+    compareMarkets();
+  };
+
   const compareMarkets = async (silent = false) => {
     if (!id || !userLocation) return;
 
@@ -110,8 +126,7 @@ export default function Compare() {
     setHasSearched(true);
 
     try {
-      // Chamada para a nova Edge Function Inteligente
-      const { data, error } = await supabase.functions.invoke('smart-compare', {
+      const { data, error } = await supabase.functions.invoke('smart-shopping-analysis', {
         body: {
           listId: id,
           userLocation: userLocation,
@@ -186,8 +201,8 @@ export default function Compare() {
         </div>
 
         <Button
-          onClick={() => compareMarkets(false)}
-          className="w-full h-14 mb-6"
+          onClick={handleNewSearch}
+          className="w-full h-14 mb-6 shadow-lg shadow-primary/20"
           size="lg"
           disabled={loading || !userLocation}
         >
@@ -195,8 +210,8 @@ export default function Compare() {
             <Loader2 className="w-5 h-5 animate-spin" />
           ) : (
             <>
-              <Sparkles className="w-5 h-5 mr-2" />
-              Buscar Melhores Preços (Inteligente)
+              {hasSearched ? <RefreshCw className="w-5 h-5 mr-2" /> : <Sparkles className="w-5 h-5 mr-2" />}
+              {hasSearched ? "Atualizar Busca" : "Buscar Melhores Preços"}
             </>
           )}
         </Button>
@@ -210,10 +225,14 @@ export default function Compare() {
                 description={`Não encontramos mercados com produtos compatíveis em um raio de ${radius}km.`}
               />
             ) : (
-              <div className="space-y-3">
-                <p className="text-sm font-medium text-foreground">
-                  {results.length} {results.length === 1 ? "mercado encontrado" : "mercados encontrados"}:
-                </p>
+              <div className="space-y-3 animate-fade-in">
+                <div className="flex justify-between items-center px-1">
+                  <p className="text-sm font-medium text-foreground">
+                    {results.length} {results.length === 1 ? "mercado encontrado" : "mercados encontrados"}
+                  </p>
+                  <span className="text-xs text-muted-foreground">Ordenado por melhor opção</span>
+                </div>
+
                 {results.map((result, index) => (
                   <MarketCard
                     key={result.id}

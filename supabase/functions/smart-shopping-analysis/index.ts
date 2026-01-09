@@ -1,172 +1,196 @@
-import "https://deno.land/x/xhr@0.1.0/mod.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-
-const openAIApiKey = Deno.env.get('OPENAI_API_KEY');
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.7.1";
+import Fuse from "https://esm.sh/fuse.js@6.6.2";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-interface MarketData {
-  id: string;
-  name: string;
-  totalPrice: number;
-  distance: number;
-  missingItems: number;
-  totalItems: number;
-  products: Array<{ name: string; price: number | null; quantity: number }>;
-}
-
-interface AnalysisRequest {
-  markets: MarketData[];
-  userLocation: { lat: number; lng: number };
+// Função para calcular distância (Haversine)
+function calculateDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const R = 6371;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+    Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
 }
 
 serve(async (req) => {
-  if (req.method === 'OPTIONS') {
-    return new Response(null, { headers: corsHeaders });
-  }
+  if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
 
   try {
-    const { markets, userLocation } = await req.json() as AnalysisRequest;
+    const supabase = createClient(
+      Deno.env.get('SUPABASE_URL')!,
+      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
+    );
 
-    console.log(`Analyzing ${markets.length} markets for smart shopping recommendations`);
+    const { listId, userLocation, radius } = await req.json();
 
-    // Filter out markets with no prices (total = 0)
-    const marketsWithPrices = markets.filter(m => m.totalPrice > 0);
+    if (!listId || !userLocation) throw new Error("Dados incompletos");
 
-    if (marketsWithPrices.length === 0) {
-      return new Response(JSON.stringify({
-        recommendation: {
-          type: "no_data",
-          message: "Nenhum mercado possui preços cadastrados para os itens da sua lista. Cadastre preços para obter recomendações inteligentes.",
-          markets: [],
-          analysis: null
-        }
-      }), {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    // 1. Buscar Itens da Lista
+    const { data: listItems, error: listError } = await supabase
+      .from("list_items")
+      .select(`
+        id, quantity, product_id,
+        products (id, name, brand, measurement)
+      `)
+      .eq("list_id", listId);
+
+    if (listError) throw listError;
+    if (!listItems?.length) throw new Error("Lista vazia");
+
+    // 2. Buscar Mercados no Raio
+    const { data: allMarkets, error: marketsError } = await supabase
+      .from("markets")
+      .select("*");
+
+    if (marketsError) throw marketsError;
+
+    const marketsInRadius = allMarkets.filter(m => {
+      const dist = calculateDistance(userLocation.lat, userLocation.lng, m.latitude, m.longitude);
+      return dist <= radius;
+    });
+
+    if (marketsInRadius.length === 0) {
+      return new Response(JSON.stringify({ success: true, results: [] }), {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
       });
     }
 
-    // Build context for AI analysis
-    const marketsSummary = marketsWithPrices.map(m => ({
-      name: m.name,
-      distance_km: m.distance.toFixed(2),
-      total_price: m.totalPrice.toFixed(2),
-      items_available: m.totalItems - m.missingItems,
-      items_missing: m.missingItems,
-      total_items: m.totalItems,
-      coverage_percent: Math.round(((m.totalItems - m.missingItems) / m.totalItems) * 100),
-      products: m.products.map(p => ({
-        name: p.name,
-        price: p.price ? `R$ ${p.price.toFixed(2)}` : "sem preço",
-        qty: p.quantity
-      }))
-    }));
+    const marketIds = marketsInRadius.map(m => m.id);
 
-    const systemPrompt = `Você é um assistente especializado em economia doméstica e compras inteligentes no Brasil. 
-Sua função é analisar opções de mercados e recomendar a melhor estratégia de compras considerando:
+    // 3. Buscar PREÇOS (Fonte da Verdade)
+    const { data: allPrices, error: pricesError } = await supabase
+      .from("market_prices")
+      .select(`
+        price, market_id, product_id, created_at,
+        products (id, name, brand, measurement)
+      `)
+      .in("market_id", marketIds);
 
-1. CUSTO-BENEFÍCIO: Preço total vs distância vs itens disponíveis
-2. DESLOCAMENTO: Considere que cada km de deslocamento custa aproximadamente R$ 1,50 (combustível + tempo)
-3. COMPLETUDE: Mercados com todos os itens são preferíveis, mas splits podem valer a pena se a economia for significativa
-4. PRATICIDADE: Ir em um só lugar geralmente é melhor, a menos que a economia seja > 15% do valor total
+    if (pricesError) throw pricesError;
 
-REGRAS DE DECISÃO:
-- Se um mercado tem < 50% dos itens, só recomende se o preço for MUITO menor
-- Calcule o custo real = preço dos produtos + (distância * 2 * R$ 1,50) para ida e volta
-- Para splits entre mercados, some os custos de deslocamento para ambos
-- Priorize mercados mais próximos em caso de empate de preços (diferença < 5%)
+    // 4. Cruzamento Inteligente com Travas de Segurança
+    const results = marketsInRadius.map(market => {
+      const distance = calculateDistance(userLocation.lat, userLocation.lng, market.latitude, market.longitude);
 
-Responda SEMPRE em português brasileiro e seja direto e prático.`;
+      // Filtra APENAS preços deste mercado
+      const marketPrices = allPrices.filter(p => p.market_id === market.id);
 
-    const userPrompt = `Analise estas opções de mercados para uma lista de compras:
+      // Configura Fuzzy Search mais restrito (0.2 = bem exigente)
+      const marketProductsSearch = new Fuse(marketPrices, {
+        keys: ["products.name"], // Busca foca no nome
+        threshold: 0.2, // Reduzido de 0.4 para 0.2 para evitar falsos positivos
+        includeScore: true
+      });
 
-MERCADOS DISPONÍVEIS:
-${JSON.stringify(marketsSummary, null, 2)}
+      let totalPrice = 0;
+      let missingItems = 0;
+      let foundPriceDates: string[] = [];
 
-TOTAL DE ITENS NA LISTA: ${marketsWithPrices[0]?.totalItems || 0}
+      listItems.forEach(item => {
+        const targetId = item.products.id;
+        const targetName = item.products.name;
+        const targetBrand = item.products.brand?.toLowerCase().trim();
 
-Por favor, forneça:
-1. RECOMENDAÇÃO PRINCIPAL: Qual a melhor opção? (pode ser um mercado só ou combinação)
-2. JUSTIFICATIVA: Por que esta é a melhor escolha? (considere preço, distância, itens disponíveis)
-3. ECONOMIA ESTIMADA: Quanto o usuário economiza comparado à pior opção?
-4. ALERTAS: Avisos importantes (itens faltantes, mercados muito longe, etc.)
+        // A. Tentativa Exata (Pelo ID do produto) - Prioridade Máxima
+        let match = marketPrices.find(p => p.product_id === targetId);
 
-Seja conciso e prático. Foque no que realmente importa para o consumidor.`;
+        // B. Tentativa Inteligente (Se não achou exato)
+        if (!match) {
+          const searchResult = marketProductsSearch.search(targetName);
 
-    console.log("Sending request to OpenAI...");
+          if (searchResult.length > 0) {
+            const bestMatch = searchResult[0];
+            const candidate = bestMatch.item.products;
+            const candidateBrand = candidate.brand?.toLowerCase().trim();
 
-    const response = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${openAIApiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: 'gpt-4o-mini',
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userPrompt }
-        ],
-        max_tokens: 1000,
-        temperature: 0.3,
-      }),
+            // TRAVA DE SEGURANÇA DE MARCA
+            // Se ambos tem marca definida e elas são diferentes, REJEITA.
+            // (Evita que Leite Parmalat dê match com Leite Ninho)
+            let brandMismatch = false;
+            if (targetBrand && candidateBrand) {
+              // Verifica se as marcas são diferentes (tolerando substring ex: "Coca" e "Coca-Cola")
+              if (!candidateBrand.includes(targetBrand) && !targetBrand.includes(candidateBrand)) {
+                brandMismatch = true;
+              }
+            }
+
+            // Se a marca bater (ou um deles não tiver marca) E a medida bater (opcional), aceita
+            if (!brandMismatch) {
+              match = bestMatch.item;
+            }
+          }
+        }
+
+        if (match) {
+          totalPrice += match.price * item.quantity;
+          foundPriceDates.push(match.created_at);
+        } else {
+          missingItems++;
+        }
+      });
+
+      let lastUpdate = new Date().toISOString();
+      if (foundPriceDates.length > 0) {
+        foundPriceDates.sort((a, b) => new Date(b).getTime() - new Date(a).getTime());
+        lastUpdate = foundPriceDates[0];
+      }
+
+      // Se o mercado não tem nenhum item da lista, ignoramos o preço total
+      if (listItems.length === missingItems) {
+        totalPrice = 0;
+      }
+
+      const coveragePercent = Math.round(((listItems.length - missingItems) / listItems.length) * 100);
+      const travelCost = distance * 2 * 1.5;
+      const realCost = totalPrice > 0 ? totalPrice + travelCost : 0;
+
+      return {
+        id: market.id,
+        name: market.name,
+        address: market.address,
+        totalPrice,
+        distance,
+        missingItems,
+        totalItems: listItems.length,
+        coveragePercent,
+        realCost,
+        isRecommended: false,
+        lastUpdate
+      };
     });
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error('OpenAI API error:', response.status, errorText);
-      throw new Error(`OpenAI API error: ${response.status}`);
-    }
-
-    const data = await response.json();
-    const aiAnalysis = data.choices[0].message.content;
-
-    console.log("AI analysis completed successfully");
-
-    // Sort markets by real cost (price + travel cost)
-    const marketsWithRealCost = marketsWithPrices.map(m => ({
-      ...m,
-      travelCost: m.distance * 2 * 1.5, // ida e volta
-      realCost: m.totalPrice + (m.distance * 2 * 1.5),
-      coveragePercent: Math.round(((m.totalItems - m.missingItems) / m.totalItems) * 100)
-    }));
-
-    // Filter markets with at least 30% coverage
-    const viableMarkets = marketsWithRealCost
-      .filter(m => m.coveragePercent >= 30)
+    // Ordenação e Recomendação
+    const viableMarkets = results
+      .filter(m => m.totalPrice > 0 && m.coveragePercent > 0) // Só mostra se tiver pelo menos 1 item
       .sort((a, b) => {
-        // Prioritize complete markets, then by real cost
-        if (a.missingItems === 0 && b.missingItems > 0) return -1;
-        if (b.missingItems === 0 && a.missingItems > 0) return 1;
+        // Prioriza quem tem mais itens (menos faltantes)
+        if (a.missingItems !== b.missingItems) return a.missingItems - b.missingItems;
+        // Depois quem é mais barato (custo real)
         return a.realCost - b.realCost;
       });
 
+    if (viableMarkets.length > 0) {
+      viableMarkets[0].isRecommended = true;
+    }
+
     return new Response(JSON.stringify({
-      recommendation: {
-        type: "smart_analysis",
-        message: aiAnalysis,
-        markets: viableMarkets.slice(0, 5),
-        bestOption: viableMarkets[0] || null,
-        analysis: {
-          totalMarketsAnalyzed: markets.length,
-          marketsWithPrices: marketsWithPrices.length,
-          viableMarkets: viableMarkets.length
-        }
-      }
+      success: true,
+      results: viableMarkets
     }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
 
   } catch (error) {
-    console.error('Error in smart-shopping-analysis:', error);
-    return new Response(JSON.stringify({ 
-      error: error instanceof Error ? error.message : 'Unknown error',
-      recommendation: null
-    }), {
-      status: 500,
+    console.error("Erro Smart Compare:", error);
+    return new Response(JSON.stringify({ error: error.message }), {
+      status: 400,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
   }
