@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Check, MapPin, Search, Store, X, Plus } from "lucide-react";
+import { Check, MapPin, Search, Store, X, Plus, Navigation } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -14,10 +14,29 @@ import { supabase } from "@/integrations/supabase/client";
 import { cn } from "@/lib/utils";
 import { useNavigate, useLocation } from "react-router-dom";
 
+// Função para calcular distância (Haversine Formula)
+function calculateDistance(lat1: number, lon1: number, lat2: number, lon2: number) {
+  const R = 6371; // Raio da terra em KM
+  const dLat = (lat2 - lat1) * (Math.PI / 180);
+  const dLon = (lon2 - lon1) * (Math.PI / 180);
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(lat1 * (Math.PI / 180)) *
+    Math.cos(lat2 * (Math.PI / 180)) *
+    Math.sin(dLon / 2) *
+    Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  const d = R * c; // Distância em KM
+  return d;
+}
+
 interface Market {
   id: string;
   name: string;
   address: string | null;
+  latitude: number;
+  longitude: number;
+  distance?: number; // Campo calculado
 }
 
 interface MarketSelectorProps {
@@ -28,27 +47,76 @@ interface MarketSelectorProps {
 export function MarketSelector({ selectedMarket, onSelectMarket }: MarketSelectorProps) {
   const [open, setOpen] = useState(false);
   const [markets, setMarkets] = useState<Market[]>([]);
+  const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [loading, setLoading] = useState(false);
+  const [locationError, setLocationError] = useState(false);
 
   const navigate = useNavigate();
   const location = useLocation();
 
+  // Ao abrir o modal, tenta pegar a localização
   useEffect(() => {
-    if (open && markets.length === 0) {
-      fetchMarkets();
+    if (open) {
+      if (navigator.geolocation) {
+        navigator.geolocation.getCurrentPosition(
+          (position) => {
+            setUserLocation({
+              lat: position.coords.latitude,
+              lng: position.coords.longitude,
+            });
+            setLocationError(false);
+          },
+          (error) => {
+            console.error("Erro ao obter localização:", error);
+            setLocationError(true);
+            // Se falhar a localização, busca todos os mercados (fallback)
+            fetchMarkets(null);
+          }
+        );
+      } else {
+        setLocationError(true);
+        fetchMarkets(null);
+      }
     }
   }, [open]);
 
-  async function fetchMarkets() {
+  // Busca mercados quando a localização estiver disponível (ou se falhar)
+  useEffect(() => {
+    if (open && (userLocation || locationError)) {
+      fetchMarkets(userLocation);
+    }
+  }, [open, userLocation, locationError]);
+
+  async function fetchMarkets(currentUserLoc: { lat: number; lng: number } | null) {
     setLoading(true);
     try {
+      // Precisamos selecionar latitude e longitude para o calculo
       const { data } = await supabase
         .from("markets")
-        .select("id, name, address")
-        .order("name");
+        .select("id, name, address, latitude, longitude");
 
-      if (data) setMarkets(data);
+      if (data) {
+        let processedMarkets = data.map((m) => ({
+          ...m,
+          // Se tiver localização do user, calcula. Senão, distância é infinita.
+          distance: currentUserLoc
+            ? calculateDistance(currentUserLoc.lat, currentUserLoc.lng, m.latitude, m.longitude)
+            : 9999,
+        }));
+
+        // Se tivermos a localização do usuário, filtramos pelo raio de 10km
+        if (currentUserLoc) {
+          processedMarkets = processedMarkets.filter((m) => m.distance <= 10);
+          // Ordena do mais perto para o mais longe
+          processedMarkets.sort((a, b) => a.distance - b.distance);
+        } else {
+          // Se não tiver localização, ordena alfabeticamente
+          processedMarkets.sort((a, b) => a.name.localeCompare(b.name));
+        }
+
+        setMarkets(processedMarkets);
+      }
     } catch (error) {
       console.error("Error fetching markets:", error);
     } finally {
@@ -72,11 +140,8 @@ export function MarketSelector({ selectedMarket, onSelectMarket }: MarketSelecto
     navigate(`/mercados/novo?returnTo=${returnUrl}`);
   };
 
-  // Função auxiliar para formatar a exibição "Nome - Endereço"
   const getMarketDisplayName = (market: Market) => {
     if (!market.address) return market.name;
-    // Pega apenas a primeira parte do endereço (Rua X) se for muito longo, ou exibe tudo
-    // Aqui optei por exibir tudo mas controlando com CSS truncate
     return `${market.name} - ${market.address}`;
   };
 
@@ -110,6 +175,23 @@ export function MarketSelector({ selectedMarket, onSelectMarket }: MarketSelecto
         </DialogHeader>
 
         <div className="p-4 pb-2">
+          {/* Feedback de Localização */}
+          {!userLocation && !locationError && (
+            <div className="mb-2 text-xs text-muted-foreground flex items-center gap-1 animate-pulse">
+              <Navigation className="w-3 h-3" /> Obtendo sua localização...
+            </div>
+          )}
+          {locationError && (
+            <div className="mb-2 text-xs text-orange-500 flex items-center gap-1">
+              <Navigation className="w-3 h-3" /> Localização indisponível. Mostrando todos.
+            </div>
+          )}
+          {userLocation && (
+            <div className="mb-2 text-xs text-emerald-600 flex items-center gap-1 font-medium">
+              <Navigation className="w-3 h-3" /> Mostrando mercados num raio de 10km
+            </div>
+          )}
+
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
             <Input
@@ -131,10 +213,22 @@ export function MarketSelector({ selectedMarket, onSelectMarket }: MarketSelecto
 
         <ScrollArea className="h-[40vh] p-4 pt-0">
           {loading ? (
-            <div className="py-8 text-center text-sm text-muted-foreground">Carregando mercados...</div>
+            <div className="py-8 text-center text-sm text-muted-foreground">Carregando mercados próximos...</div>
           ) : filteredMarkets.length === 0 ? (
-            <div className="py-8 text-center space-y-2">
-              <p className="text-sm text-muted-foreground">Nenhum mercado encontrado.</p>
+            <div className="py-8 text-center space-y-3">
+              <p className="text-sm text-muted-foreground">
+                {userLocation
+                  ? "Nenhum mercado encontrado a menos de 10km."
+                  : "Nenhum mercado encontrado."}
+              </p>
+              <Button
+                variant="link"
+                size="sm"
+                onClick={handleCreateNew}
+                className="text-primary"
+              >
+                Cadastre este mercado agora
+              </Button>
             </div>
           ) : (
             <div className="space-y-2">
@@ -149,25 +243,40 @@ export function MarketSelector({ selectedMarket, onSelectMarket }: MarketSelecto
                       : "bg-card border-border hover:border-primary/30 hover:bg-accent/50"
                   )}
                 >
-                  <MapPin className={cn(
-                    "w-5 h-5 mt-0.5 flex-shrink-0",
-                    selectedMarket?.id === market.id ? "text-primary" : "text-muted-foreground"
-                  )} />
+                  <div className="mt-0.5 bg-primary/10 p-1.5 rounded-lg shrink-0">
+                    <MapPin className={cn(
+                      "w-4 h-4",
+                      selectedMarket?.id === market.id ? "text-primary" : "text-muted-foreground"
+                    )} />
+                  </div>
+
                   <div className="flex-1 min-w-0">
-                    <p className={cn(
-                      "font-medium leading-tight",
-                      selectedMarket?.id === market.id ? "text-primary" : "text-foreground"
-                    )}>
-                      {market.name}
-                      {market.address && (
-                        <span className="font-normal text-muted-foreground ml-1">
-                          - {market.address}
+                    <div className="flex justify-between items-center gap-2">
+                      <p className={cn(
+                        "font-medium leading-tight truncate",
+                        selectedMarket?.id === market.id ? "text-primary" : "text-foreground"
+                      )}>
+                        {market.name}
+                      </p>
+
+                      {market.distance !== undefined && market.distance < 9000 && (
+                        <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-secondary text-muted-foreground whitespace-nowrap">
+                          {market.distance < 1
+                            ? `${Math.round(market.distance * 1000)}m`
+                            : `${market.distance.toFixed(1)}km`}
                         </span>
                       )}
-                    </p>
+                    </div>
+
+                    {market.address && (
+                      <p className="text-xs text-muted-foreground mt-0.5 line-clamp-1">
+                        {market.address}
+                      </p>
+                    )}
                   </div>
+
                   {selectedMarket?.id === market.id && (
-                    <Check className="w-5 h-5 text-primary flex-shrink-0" />
+                    <Check className="w-5 h-5 text-primary flex-shrink-0 mt-1" />
                   )}
                 </button>
               ))}
