@@ -1,4 +1,3 @@
-// src/components/MapSelector.tsx
 import { useEffect, useState } from "react";
 import { MapContainer, TileLayer, Marker, useMapEvents, useMap } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
@@ -6,7 +5,7 @@ import L from "leaflet";
 import { cn } from "@/lib/utils";
 import { Loader2 } from "lucide-react";
 
-// Correção dos ícones
+// Correção dos ícones do Leaflet
 import icon from "leaflet/dist/images/marker-icon.png";
 import iconShadow from "leaflet/dist/images/marker-shadow.png";
 
@@ -21,11 +20,10 @@ let DefaultIcon = L.icon({
 L.Marker.prototype.options.icon = DefaultIcon;
 
 interface MapSelectorProps {
-    // Tornamos opcional pois no modo leitura não precisamos passar função
     onLocationSelect?: (lat: number, lng: number) => void;
     selectedLocation?: { lat: number; lng: number } | null;
     className?: string;
-    readOnly?: boolean; // Nova propriedade
+    readOnly?: boolean;
 }
 
 function MapEvents({
@@ -58,7 +56,6 @@ export function MapSelector({ onLocationSelect, selectedLocation, className, rea
     const [initialPosition, setInitialPosition] = useState<{ lat: number; lng: number } | null>(null);
 
     useEffect(() => {
-        // Se já tiver uma localização selecionada (modo edição/visualização), usa ela como inicial
         if (selectedLocation) {
             setInitialPosition(selectedLocation);
             return;
@@ -79,7 +76,7 @@ export function MapSelector({ onLocationSelect, selectedLocation, className, rea
         } else {
             setInitialPosition({ lat: -23.5505, lng: -46.6333 });
         }
-    }, []); // Removemos selectedLocation das dependências para evitar re-render loops na inicialização
+    }, []);
 
     if (!initialPosition) {
         return (
@@ -96,14 +93,25 @@ export function MapSelector({ onLocationSelect, selectedLocation, className, rea
     }
 
     return (
-        <div className={cn("rounded-2xl overflow-hidden border border-border isolate z-0", className || "h-64")}>
+        <div
+            className={cn(
+                "rounded-2xl overflow-hidden border border-border relative z-0",
+                className || "h-64"
+            )}
+            // FIX PARA SAFARI/IPHONE: Força o navegador a reconhecer o recorte (clipping)
+            style={{
+                WebkitMaskImage: "-webkit-radial-gradient(white, black)",
+                maskImage: "radial-gradient(white, black)",
+                isolation: "isolate"
+            }}
+        >
             <MapContainer
                 center={[initialPosition.lat, initialPosition.lng]}
                 zoom={15}
                 style={{ width: "100%", height: "100%" }}
-                className="z-0"
-                dragging={!readOnly} // Desativa arrastar se for readOnly (opcional, pode deixar true se preferir)
-                scrollWheelZoom={!readOnly} // Evita zoom acidental ao rolar a página
+                className="z-[1]" // Garante que o canvas do mapa fique acima do fundo
+                dragging={!readOnly}
+                scrollWheelZoom={!readOnly}
                 doubleClickZoom={!readOnly}
             >
                 <TileLayer
@@ -111,17 +119,11 @@ export function MapSelector({ onLocationSelect, selectedLocation, className, rea
                     url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
                 />
 
-                {/* Só adiciona eventos de clique se NÃO for readOnly */}
                 {!readOnly && (
                     <MapEvents onSelect={onLocationSelect} selectedLocation={selectedLocation} />
                 )}
 
-                {/* Se for readOnly e tiver location, centraliza o mapa nela ao carregar */}
-                {readOnly && selectedLocation && (
-                    <Marker position={[selectedLocation.lat, selectedLocation.lng]} />
-                )}
-
-                {!readOnly && selectedLocation && (
+                {selectedLocation && (
                     <Marker position={[selectedLocation.lat, selectedLocation.lng]} />
                 )}
             </MapContainer>
