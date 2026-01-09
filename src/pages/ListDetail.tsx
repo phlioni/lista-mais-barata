@@ -1150,6 +1150,7 @@ export default function ListDetail() {
         .from("shopping_lists")
         .update({
           status: "open",
+          // Não limpamos o market_id para manter histórico
         })
         .eq("id", id);
 
@@ -1975,7 +1976,10 @@ export default function ListDetail() {
                             <p className="text-sm text-muted-foreground truncate">
                               {isInList
                                 ? "Toque para remover"
-                                : product.brand || "Sem marca"}
+                                : `${product.brand || "Sem marca"}${product.measurement
+                                  ? ` • ${product.measurement}`
+                                  : ""
+                                }`}
                             </p>
                           </div>
                         </button>
