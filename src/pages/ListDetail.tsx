@@ -1642,20 +1642,6 @@ export default function ListDetail() {
                 </Button>
 
                 <Button
-                  onClick={handleCameraClick}
-                  variant="secondary"
-                  className="w-14 shrink-0 h-14 rounded-xl border border-primary/20"
-                  disabled={isScanning}
-                  title="Tirar Foto da Nota"
-                >
-                  {isScanning ? (
-                    <Loader2 className="w-5 h-5 animate-spin" />
-                  ) : (
-                    <Camera className="w-5 h-5 text-primary" />
-                  )}
-                </Button>
-
-                <Button
                   onClick={() => setFinishDialogOpen(true)}
                   className="flex-1 h-14 rounded-xl shadow-lg shadow-primary/20"
                 >
