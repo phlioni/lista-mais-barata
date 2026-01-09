@@ -94,6 +94,16 @@ interface ItemPrice {
   [itemId: string]: number;
 }
 
+// Helper para timeout de Promises (evita travamento eterno)
+const withTimeout = <T,>(promise: Promise<T>, ms: number, fallback: T): Promise<T> => {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) =>
+      setTimeout(() => reject(new Error("Timeout")), ms)
+    ).catch(() => fallback)
+  ]);
+};
+
 export default function ListDetail() {
   const params = useParams();
   const routeId = params.id;
@@ -164,6 +174,7 @@ export default function ListDetail() {
   const [processingStatus, setProcessingStatus] = useState<{
     current: number;
     total: number;
+    currentItemName?: string;
   } | null>(null);
 
   useEffect(() => {
@@ -731,11 +742,11 @@ export default function ListDetail() {
         return;
       }
 
-      // IMPORTANTE: Mapeia unit_price para price
       const newItemsFromQR = data.items.map((item: any) => ({
         name: item.name,
         price: item.unit_price,
         quantity: item.quantity,
+        selected: true // Tenta forçar seleção padrão
       }));
 
       setScanResult({
@@ -761,7 +772,7 @@ export default function ListDetail() {
     }
   };
 
-  // --- OTIMIZAÇÃO: Processamento em Lotes ---
+  // --- OTIMIZAÇÃO: Processamento em Lotes (Paralelo) ---
   const processBatch = async <T, R>(
     items: T[],
     batchSize: number,
@@ -770,10 +781,14 @@ export default function ListDetail() {
     const results: R[] = [];
     for (let i = 0; i < items.length; i += batchSize) {
       const batch = items.slice(i, i + batchSize);
+
+      // Atualiza status na tela
       setProcessingStatus({
-        current: Math.min(i + batchSize, items.length),
+        current: Math.min(i, items.length),
         total: items.length,
+        currentItemName: (batch[0] as any).name || "Item..."
       });
+
       const batchResults = await Promise.all(batch.map(fn));
       results.push(...batchResults);
     }
@@ -784,9 +799,9 @@ export default function ListDetail() {
     updates: Array<{ itemId: string; price: number }>;
     newItems: Array<{ name: string; price: number; quantity: number }>;
   }) => {
-    // Inicia Loading
+    // Inicia Loading com Feedback Visual
     const totalOps = data.updates.length + data.newItems.length;
-    setProcessingStatus({ current: 0, total: totalOps });
+    setProcessingStatus({ current: 0, total: totalOps, currentItemName: "Iniciando..." });
 
     const newPrices = { ...itemPrices };
     const itemsToUpdate = [...items];
@@ -801,28 +816,30 @@ export default function ListDetail() {
       }
     });
 
-    // 2. Novos Itens (Loteamento)
+    // 2. Novos Itens (Pesado - Loteamento)
     const newItemsAdded: ListItem[] = [];
 
     if (data.newItems.length > 0) {
       const results = await processBatch(data.newItems, 5, async (newItem) => {
         try {
-          // A. Validação IA
-          const { data: validationData } = await supabase.functions.invoke(
-            "validate-product",
-            {
+          // A. Validação IA (Com Timeout de 10s para não travar o lote)
+          // Se a IA demorar > 10s, retorna o nome original sem validação
+          const validationData = await withTimeout(
+            supabase.functions.invoke("validate-product", {
               body: { name: newItem.name, brand: null },
-            }
+            }),
+            10000,
+            { data: { isValid: false } } // Fallback em caso de timeout
           );
 
-          const finalName = validationData?.isValid
-            ? validationData.correctedName
+          const finalName = validationData.data?.isValid
+            ? validationData.data.correctedName
             : newItem.name;
-          const finalBrand = validationData?.isValid
-            ? validationData.correctedBrand
+          const finalBrand = validationData.data?.isValid
+            ? validationData.data.correctedBrand
             : null;
-          const finalMeasurement = validationData?.isValid
-            ? validationData.detectedMeasurement
+          const finalMeasurement = validationData.data?.isValid
+            ? validationData.data.detectedMeasurement
             : null;
 
           // B. Produto
@@ -838,15 +855,23 @@ export default function ListDetail() {
             .single();
 
           if (prodError) {
+            // Tenta buscar existente se der erro de duplicidade
             const { data: existing } = await supabase
               .from("products")
               .select("id")
               .eq("name", finalName)
-              .eq("brand", finalBrand) // Idealmente tratar nulls
+              .eq("brand", finalBrand || null) // Trata null vs 'null'
               .maybeSingle();
 
             if (existing) productId = existing.id;
-            else return null;
+            else {
+              // Se falhar tudo, tenta criar com o nome original bruto
+              const { data: fallbackProd } = await supabase
+                .from('products')
+                .insert({ name: newItem.name, brand: null })
+                .select().single();
+              productId = fallbackProd?.id;
+            }
           } else {
             productId = productData.id;
           }
@@ -879,7 +904,7 @@ export default function ListDetail() {
           }
           return null;
         } catch (e) {
-          console.error("Erro processando item:", newItem.name, e);
+          console.error("Erro item:", newItem.name, e);
           return null;
         }
       });
@@ -889,14 +914,14 @@ export default function ListDetail() {
       });
     }
 
-    // 3. Atualização de Estado Única
+    // 3. Atualização Final
     setItemPrices(newPrices);
     setItems([...itemsToUpdate, ...newItemsAdded]);
-    setProcessingStatus(null); // Fim do Loading
+    setProcessingStatus(null); // Fecha o loading
 
     toast({
       title: "Lista atualizada",
-      description: `${data.updates.length} preços atualizados e ${newItemsAdded.length} novos itens adicionados.`,
+      description: `${data.updates.length} preços e ${newItemsAdded.length} novos itens.`,
     });
   };
 
@@ -1220,9 +1245,11 @@ export default function ListDetail() {
       {processingStatus && (
         <div className="fixed inset-0 z-[100] bg-black/80 backdrop-blur-sm flex flex-col items-center justify-center text-white">
           <Loader2 className="w-12 h-12 animate-spin mb-4 text-primary" />
-          <h3 className="text-xl font-bold mb-1">Atualizando Lista...</h3>
-          <p className="text-white/70">
-            Processando item {processingStatus.current} de {processingStatus.total}
+          <h3 className="text-xl font-bold mb-1">Processando Lista...</h3>
+          <p className="text-white/70 text-sm">
+            {processingStatus.currentItemName
+              ? `Validando: ${processingStatus.currentItemName.substring(0, 20)}...`
+              : "Aguarde..."}
           </p>
           <div className="w-64 h-2 bg-white/10 rounded-full mt-4 overflow-hidden">
             <div
@@ -1233,6 +1260,9 @@ export default function ListDetail() {
               }}
             />
           </div>
+          <p className="mt-2 text-xs text-white/50">
+            {processingStatus.current} de {processingStatus.total} itens
+          </p>
         </div>
       )}
 
@@ -1529,7 +1559,7 @@ export default function ListDetail() {
                 >
                   <QrCode className="w-5 h-5 text-primary" />
                 </Button>
-                {/*
+
                 <Button
                   onClick={handleCameraClick}
                   variant="secondary"
@@ -1543,7 +1573,6 @@ export default function ListDetail() {
                     <Camera className="w-5 h-5 text-primary" />
                   )}
                 </Button>
-                */}
 
                 <Button
                   onClick={() => setFinishDialogOpen(true)}
@@ -1570,6 +1599,7 @@ export default function ListDetail() {
         onConfirm={handleReconciliationConfirm}
       />
 
+      {/* DIALOGS - TODOS INCLUÍDOS ABAIXO */}
       <Dialog open={editNameDialogOpen} onOpenChange={setEditNameDialogOpen}>
         <DialogContent className="w-[90%] max-w-sm mx-auto rounded-2xl p-6">
           <DialogHeader>
