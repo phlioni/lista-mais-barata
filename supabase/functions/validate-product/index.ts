@@ -9,6 +9,7 @@ const corsHeaders = {
 };
 
 serve(async (req) => {
+    // Handle CORS preflight request
     if (req.method === 'OPTIONS') {
         return new Response('ok', { headers: corsHeaders });
     }
@@ -16,28 +17,50 @@ serve(async (req) => {
     try {
         const { name, brand } = await req.json();
 
-        if (!name) throw new Error('Nome do produto é obrigatório');
+        if (!name) {
+            throw new Error('Nome do produto é obrigatório');
+        }
 
+        // Prompt Refinado para "Traduzir" Cupom Fiscal Brasileiro
         const systemPrompt = `
-      Você é um especialista em produtos de supermercado.
-      Sua tarefa é normalizar o nome do produto e EXTRAIR metadados.
+      Você é um especialista em decifrar itens de cupom fiscal brasileiro (NFC-e).
+      Sua missão é expandir abreviações, corrigir nomes e separar metadados.
 
       ENTRADA: Nome: "${name}", Marca Sugerida: "${brand || ''}"
 
-      REGRAS:
-      1. Extraia o NOME PRINCIPAL (ex: "Batata Palha", "Coca-Cola").
-      2. Extraia a MARCA se estiver no nome (ex: "Yoki", "Nestlé").
-      3. Extraia a MEDIDA/PESO se houver (ex: "500g", "1kg", "2L", "350ml", "Unitario").
-         - Se não houver medida explícita, retorne null.
-      4. Corrija ortografia e use Title Case.
+      DIRETRIZES DE TRADUÇÃO (IMPORTANTE):
+      1. EXPANDA ABREVIAÇÕES COMUNS:
+         - "M TOM", "M. TOM", "MASSA TOM" -> Nome: "Massa de Tomate"
+         - "MOLHO TOM", "MOL TOM" -> Nome: "Molho de Tomate"
+         - "EXT TOM" -> Nome: "Extrato de Tomate"
+         - "LAV R", "LAVA ROUP" -> Nome: "Lava Roupas"
+         - "SAB PO", "SAB PO" -> Nome: "Sabão em Pó"
+         - "SAB BARRA" -> Nome: "Sabão em Barra"
+         - "PAP HIG", "P. HIG" -> Nome: "Papel Higiênico"
+         - "CR LEITE" -> Nome: "Creme de Leite"
+         - "LEITE COND" -> Nome: "Leite Condensado"
+         - "ACHOC" -> Nome: "Achocolatado"
+         - "REFRIG", "REF" -> Nome: "Refrigerante"
+         - "BATATA PAL" -> Nome: "Batata Palha"
+         - "MAC", "ESPAG", "PARAF" -> Nome: "Macarrão" (Espaguete, Parafuso)
 
-      SAÍDA (JSON):
+      2. SEPARAÇÃO INTELIGENTE:
+         - O "Nome" deve ser o TIPO do produto (ex: "Massa de Tomate").
+         - A "Marca" deve ser extraída do texto se não fornecida (ex: em "M TOM MAMMA", "MAMMA" é a Marca).
+         - A "Medida" deve ser extraída se houver (ex: "340g", "1kg", "2L").
+
+      3. REGRAS GERAIS:
+         - Use Title Case (Iniciais Maiúsculas).
+         - Se a marca for óbvia (ex: Coca-Cola, Yoki, Mamma), preencha o campo brand.
+         - Se o nome ficar genérico demais (ex: "Alimento"), tente ser mais específico com base nas palavras chaves.
+
+      SAÍDA ESPERADA (JSON):
       {
         "isValid": boolean,
-        "correctedName": "string (apenas o nome do produto)",
+        "correctedName": "string (Nome expandido e corrigido)",
         "correctedBrand": "string | null",
-        "detectedMeasurement": "string | null (ex: '500g')",
-        "reason": "string (se inválido)"
+        "detectedMeasurement": "string | null (ex: '340g')",
+        "reason": "string (apenas se inválido)"
       }
     `;
 
@@ -48,11 +71,11 @@ serve(async (req) => {
                 'Content-Type': 'application/json',
             },
             body: JSON.stringify({
-                model: 'gpt-4o-mini',
+                model: 'gpt-4o-mini', // Modelo rápido e eficiente para essa tarefa
                 messages: [
                     { role: 'system', content: systemPrompt }
                 ],
-                temperature: 0.1,
+                temperature: 0.1, // Baixa temperatura para ser mais assertivo e menos "criativo"
                 response_format: { type: "json_object" }
             }),
         });
