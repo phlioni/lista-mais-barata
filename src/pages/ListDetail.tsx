@@ -60,7 +60,7 @@ import {
 } from "@/components/ReceiptReconciliation";
 import { Scanner } from "@yudiel/react-qr-scanner";
 
-// Helper para timeout seguro - Retorna o fallback em vez de lançar erro
+// Helper para timeout seguro
 const safeInvoke = async <T,>(promise: Promise<T>, ms: number, fallback: T): Promise<T> => {
   let timer: any;
   const timeoutPromise = new Promise<T>((resolve) => {
@@ -137,8 +137,6 @@ export default function ListDetail() {
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
-
-  // NOVO STATE PARA O FILTRO DA LISTA
   const [listFilter, setListFilter] = useState("");
 
   const [addDialogOpen, setAddDialogOpen] = useState(false);
@@ -254,7 +252,6 @@ export default function ListDetail() {
     }
   }, [preselectedMarketId, usePrices, list, routeMarketId]);
 
-  // ORDENAÇÃO INTELIGENTE (Prioriza itens com preço)
   const sortedItems = useMemo(() => {
     const hasAnyPrice = Object.keys(itemPrices).length > 0;
     const itemsCopy = [...items];
@@ -275,16 +272,13 @@ export default function ListDetail() {
     return itemsCopy;
   }, [items, itemPrices, isShoppingMode, isCompareMode]);
 
-  // FILTRAGEM DOS ITENS NA TELA (BASEADO NO SORTED ITEMS)
   const filteredListItems = useMemo(() => {
     if (!listFilter.trim()) return sortedItems;
-
     const lowerFilter = listFilter.toLowerCase();
 
     return sortedItems.filter((item) => {
       const productName = item.products.name.toLowerCase();
       const productBrand = item.products.brand?.toLowerCase() || "";
-
       return productName.includes(lowerFilter) || productBrand.includes(lowerFilter);
     });
   }, [sortedItems, listFilter]);
@@ -368,6 +362,8 @@ export default function ListDetail() {
       if (marketError) throw marketError;
       setSelectedMarket(marketData);
 
+      let initialPrices: ItemPrice = {};
+
       if (shouldFetchPrices) {
         const { data: listItems } = await supabase
           .from("list_items")
@@ -389,22 +385,31 @@ export default function ListDetail() {
               productToItem[item.product_id] = item.id;
             });
 
-            const prices: ItemPrice = {};
             pricesData.forEach((price: any) => {
               const itemId = productToItem[price.product_id];
               if (itemId) {
-                prices[itemId] = price.price;
+                initialPrices[itemId] = price.price;
               }
             });
-            setItemPrices(prices);
           }
         }
-      } else {
-        setItemPrices((prev) => {
-          if (Object.keys(prev).length === 0) return {};
-          return prev;
-        });
       }
+
+      // NOVO: Merge com LocalStorage para recuperar dados perdidos no refresh
+      // Prioridade: O que está no LocalStorage (sessão atual) sobrescreve o banco (histórico)
+      if (id) {
+        const localPricesJson = localStorage.getItem(`list_prices_${id}`);
+        if (localPricesJson) {
+          try {
+            const localPrices = JSON.parse(localPricesJson);
+            initialPrices = { ...initialPrices, ...localPrices };
+          } catch (e) {
+            console.error("Erro ao ler preços locais", e);
+          }
+        }
+      }
+
+      setItemPrices(initialPrices);
 
       if (enableShoppingMode) {
         setIsShoppingMode(true);
@@ -457,6 +462,8 @@ export default function ListDetail() {
 
       if (error) throw error;
 
+      // Limpa lixo do localstorage se existir
+      localStorage.removeItem(`list_prices_${id}`);
       navigate("/");
     } catch (error) {
       console.error("Error deleting list:", error);
@@ -915,7 +922,13 @@ export default function ListDetail() {
       }
 
       setItems((prev) => [...prev, ...newItemsAdded]);
-      setItemPrices((prev) => ({ ...prev, ...newPrices }));
+
+      // NOVO: Salva os preços importados também no LocalStorage
+      const mergedPrices = { ...itemPrices, ...newPrices };
+      setItemPrices(mergedPrices);
+      if (id) {
+        localStorage.setItem(`list_prices_${id}`, JSON.stringify(mergedPrices));
+      }
 
       toast({
         title: "Importação Concluída!",
@@ -952,6 +965,11 @@ export default function ListDetail() {
         toggleCheck(update.itemId);
       }
     });
+
+    // NOVO: Atualiza LocalStorage
+    if (id) {
+      localStorage.setItem(`list_prices_${id}`, JSON.stringify(newPrices));
+    }
 
     setItemPrices(newPrices);
     setItems(itemsToUpdate);
@@ -996,6 +1014,11 @@ export default function ListDetail() {
       }
       setItems(prev => [...prev, ...addedItems]);
       setItemPrices(prev => ({ ...prev, ...newPrices }));
+
+      // Update local storage again with new items
+      if (id) {
+        localStorage.setItem(`list_prices_${id}`, JSON.stringify(newPrices));
+      }
     }
     setProcessingStatus(null);
   };
@@ -1049,12 +1072,18 @@ export default function ListDetail() {
     }
   };
 
+  // NOVO: Atualiza o preço E salva no LocalStorage
   const updatePrice = (itemId: string, price: number) => {
     if (list?.status === "closed" || isCompareMode) return;
-    setItemPrices((prev) => ({
-      ...prev,
-      [itemId]: price,
-    }));
+
+    setItemPrices((prev) => {
+      const newPrices = { ...prev, [itemId]: price };
+      // Persiste no navegador para não perder no refresh
+      if (id) {
+        localStorage.setItem(`list_prices_${id}`, JSON.stringify(newPrices));
+      }
+      return newPrices;
+    });
   };
 
   const removeItem = async (itemId: string) => {
@@ -1151,6 +1180,10 @@ export default function ListDetail() {
 
       setList((prev) => (prev ? { ...prev, status: "open" } : null));
       setIsShoppingMode(false);
+
+      // NOVO: Limpa o LocalStorage ao cancelar
+      localStorage.removeItem(`list_prices_${id}`);
+
     } catch (error) {
       console.error("Error cancelling shopping:", error);
       setIsShoppingMode(false);
@@ -1217,6 +1250,10 @@ export default function ListDetail() {
           ? { ...prev, status: "closed", market_id: selectedMarket.id }
           : null
       );
+
+      // NOVO: Limpa o LocalStorage ao finalizar com sucesso
+      localStorage.removeItem(`list_prices_${id}`);
+
       setFinishDialogOpen(false);
       setIsShoppingMode(false);
     } catch (error) {
