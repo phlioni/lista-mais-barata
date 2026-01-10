@@ -138,6 +138,9 @@ export default function ListDetail() {
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
 
+  // NOVO STATE PARA O FILTRO DA LISTA
+  const [listFilter, setListFilter] = useState("");
+
   const [addDialogOpen, setAddDialogOpen] = useState(false);
   const [duplicateDialogOpen, setDuplicateDialogOpen] = useState(false);
   const [finishDialogOpen, setFinishDialogOpen] = useState(false);
@@ -160,7 +163,7 @@ export default function ListDetail() {
     id?: string;
     name: string;
     brand: string;
-    measurement: string; // Adicionado campo de medida
+    measurement: string;
   }>({ name: "", brand: "", measurement: "" });
   const [validatingProduct, setValidatingProduct] = useState(false);
 
@@ -253,10 +256,7 @@ export default function ListDetail() {
 
   // ORDENAÇÃO INTELIGENTE (Prioriza itens com preço)
   const sortedItems = useMemo(() => {
-    // Se não tiver preço carregado ou não estiver em modo de compra/comparação, mantem ordem de criação
     const hasAnyPrice = Object.keys(itemPrices).length > 0;
-
-    // Clona para não mutar o state original
     const itemsCopy = [...items];
 
     if (hasAnyPrice || isShoppingMode || isCompareMode) {
@@ -266,18 +266,28 @@ export default function ListDetail() {
         const hasPriceA = priceA > 0;
         const hasPriceB = priceB > 0;
 
-        // 1. Quem tem preço vem primeiro
         if (hasPriceA && !hasPriceB) return -1;
         if (!hasPriceA && hasPriceB) return 1;
 
-        // 2. Desempate alfabético
         return a.products.name.localeCompare(b.products.name);
       });
     }
-
-    // Se não estiver comprando, ordem original (criação)
     return itemsCopy;
   }, [items, itemPrices, isShoppingMode, isCompareMode]);
+
+  // FILTRAGEM DOS ITENS NA TELA (BASEADO NO SORTED ITEMS)
+  const filteredListItems = useMemo(() => {
+    if (!listFilter.trim()) return sortedItems;
+
+    const lowerFilter = listFilter.toLowerCase();
+
+    return sortedItems.filter((item) => {
+      const productName = item.products.name.toLowerCase();
+      const productBrand = item.products.brand?.toLowerCase() || "";
+
+      return productName.includes(lowerFilter) || productBrand.includes(lowerFilter);
+    });
+  }, [sortedItems, listFilter]);
 
   const fetchListData = async () => {
     if (!id) return;
@@ -557,7 +567,6 @@ export default function ListDetail() {
 
       const correctedName = validationData.correctedName;
       const correctedBrand = validationData.correctedBrand || null;
-      // Prioriza a medida digitada manualmente, se não tiver, usa a da IA
       const manualMeasurement = editingProductData.measurement?.trim() || null;
       const finalMeasurement = manualMeasurement || validationData.detectedMeasurement || null;
 
@@ -782,36 +791,30 @@ export default function ListDetail() {
 
       const newPrices = { ...itemPrices };
       const newItemsAdded: ListItem[] = [];
-      // const updatedItems = [...items]; // Não precisa clonar aqui se for usar o setState funcional ou reconstruir no final
 
-      // OTIMIZAÇÃO: Processamento em Lotes com Resiliência a Falhas
       const batchSize = 5;
       for (let i = 0; i < scannedItems.length; i += batchSize) {
         const batch = scannedItems.slice(i, i + batchSize);
 
-        // Atualiza status
         setProcessingStatus({
           current: Math.min(i + batch.length, scannedItems.length),
           total: scannedItems.length,
           currentItemName: (batch[0] as any).name || "Item...",
         });
 
-        // Delay para evitar 429 Too Many Requests
         if (i > 0) await new Promise(r => setTimeout(r, 300));
 
         const batchResults = await Promise.all(
           batch.map(async (scannedItem: any) => {
             try {
-              // 1. Validação IA (usando safeInvoke para NÃO travar se der erro)
               const validationData = await safeInvoke(
                 supabase.functions.invoke("validate-product", {
                   body: { name: scannedItem.name, brand: null },
                 }),
-                8000, // 8 segundos de timeout
+                8000,
                 { data: { isValid: false } }
               );
 
-              // Se a IA falhar, usa o nome original. O importante é não perder o item.
               const finalName = validationData.data?.isValid
                 ? validationData.data.correctedName
                 : scannedItem.name;
@@ -822,10 +825,8 @@ export default function ListDetail() {
                 ? validationData.data.detectedMeasurement
                 : null;
 
-              // 2. Busca ou Cria Produto
               let productId: string;
 
-              // Tenta criar primeiro
               const { data: productData, error: prodError } = await supabase
                 .from("products")
                 .insert({
@@ -837,7 +838,6 @@ export default function ListDetail() {
                 .single();
 
               if (prodError) {
-                // Se falhar (duplicado), busca o existente
                 const { data: existingProd } = await supabase
                   .from("products")
                   .select("id")
@@ -848,14 +848,12 @@ export default function ListDetail() {
                 if (existingProd) {
                   productId = existingProd.id;
                 } else {
-                  // Fallback: Tenta criar com o nome original se a normalização falhou na unique constraint
                   const { data: rawProd } = await supabase
                     .from("products")
-                    .insert({ name: scannedItem.name, brand: null }) // Sem normalização
+                    .insert({ name: scannedItem.name, brand: null })
                     .select()
                     .single();
 
-                  // Se ainda falhar, tenta buscar pelo nome original
                   if (!rawProd) {
                     const { data: rawExist } = await supabase.from("products").select("id").eq("name", scannedItem.name).maybeSingle();
                     productId = rawExist?.id || "";
@@ -872,7 +870,6 @@ export default function ListDetail() {
                 return null;
               }
 
-              // 3. Insere na Lista (Já marcado como comprado)
               const { data: listItemData } = await supabase
                 .from("list_items")
                 .insert({
@@ -909,7 +906,6 @@ export default function ListDetail() {
           })
         );
 
-        // Processa resultados do lote
         batchResults.forEach((res) => {
           if (res && res.type === 'new') {
             newItemsAdded.push(res.item);
@@ -948,7 +944,6 @@ export default function ListDetail() {
     const newPrices = { ...itemPrices };
     const itemsToUpdate = [...items];
 
-    // Updates
     data.updates.forEach((update) => {
       newPrices[update.itemId] = update.price;
       const idx = itemsToUpdate.findIndex((i) => i.id === update.itemId);
@@ -961,7 +956,6 @@ export default function ListDetail() {
     setItemPrices(newPrices);
     setItems(itemsToUpdate);
 
-    // New Items (Foto)
     if (data.newItems.length > 0) {
       const batchSize = 5;
       const addedItems: ListItem[] = [];
@@ -1150,7 +1144,6 @@ export default function ListDetail() {
         .from("shopping_lists")
         .update({
           status: "open",
-          // Não limpamos o market_id para manter histórico
         })
         .eq("id", id);
 
@@ -1536,24 +1529,51 @@ export default function ListDetail() {
               (isClosed || isCompareMode) && "opacity-95"
             )}
           >
-            {sortedItems.map((item) => (
-              <ProductItem
-                key={item.id}
-                id={item.id}
-                name={item.products.name}
-                brand={item.products.brand || undefined}
-                measurement={item.products.measurement}
-                quantity={item.quantity}
-                isChecked={item.is_checked}
-                price={itemPrices[item.id]}
-                showPriceInput={isShoppingMode && !isClosed && !isCompareMode}
-                readonly={isClosed || isCompareMode}
-                onToggleCheck={toggleCheck}
-                onUpdateQuantity={updateQuantity}
-                onUpdatePrice={updatePrice}
-                onRemove={removeItem}
+            {/* CAMPO DE BUSCA/FILTRO DA LISTA */}
+            <div className="relative mb-4">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+              <Input
+                placeholder="Buscar na lista..."
+                className="pl-9 pr-9 h-10 rounded-xl bg-secondary/30 border-transparent focus:bg-background"
+                value={listFilter}
+                onChange={(e) => setListFilter(e.target.value)}
               />
-            ))}
+              {listFilter && (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="absolute right-1 top-1/2 -translate-y-1/2 h-8 w-8 hover:bg-transparent text-muted-foreground"
+                  onClick={() => setListFilter("")}
+                >
+                  <X className="w-4 h-4" />
+                </Button>
+              )}
+            </div>
+
+            {filteredListItems.length === 0 && listFilter ? (
+              <div className="text-center py-8 text-muted-foreground">
+                Nenhum item encontrado para "{listFilter}"
+              </div>
+            ) : (
+              filteredListItems.map((item) => (
+                <ProductItem
+                  key={item.id}
+                  id={item.id}
+                  name={item.products.name}
+                  brand={item.products.brand || undefined}
+                  measurement={item.products.measurement}
+                  quantity={item.quantity}
+                  isChecked={item.is_checked}
+                  price={itemPrices[item.id]}
+                  showPriceInput={isShoppingMode && !isClosed && !isCompareMode}
+                  readonly={isClosed || isCompareMode}
+                  onToggleCheck={toggleCheck}
+                  onUpdateQuantity={updateQuantity}
+                  onUpdatePrice={updatePrice}
+                  onRemove={removeItem}
+                />
+              ))
+            )}
           </div>
         )}
       </main>
@@ -1829,7 +1849,6 @@ export default function ListDetail() {
                     className="h-12 rounded-xl"
                   />
                 </div>
-                {/* CAMPO DE MEDIDA ADICIONADO */}
                 <div className="space-y-2">
                   <Label>Medida (Ex: 500g, 1L)</Label>
                   <Input
@@ -1974,12 +1993,19 @@ export default function ListDetail() {
                               {product.name}
                             </p>
                             <p className="text-sm text-muted-foreground truncate">
-                              {isInList
-                                ? "Toque para remover"
-                                : `${product.brand || "Sem marca"}${product.measurement
-                                  ? ` • ${product.measurement}`
-                                  : ""
-                                }`}
+                              {isInList ? (
+                                "Toque para remover"
+                              ) : (
+                                <span>
+                                  {product.brand || "Sem marca"}
+                                  {product.measurement && (
+                                    <span className="font-medium text-foreground">
+                                      {" "}
+                                      • {product.measurement}
+                                    </span>
+                                  )}
+                                </span>
+                              )}
                             </p>
                           </div>
                         </button>
