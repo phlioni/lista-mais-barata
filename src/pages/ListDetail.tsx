@@ -1726,11 +1726,11 @@ export default function ListDetail() {
                       />
                     </div>
 
-                    {/* Feedback visual estilo "Gaveta" conectada ao card de cima */}
+                    {/* Feedback visual estilo "Gaveta" conectada ao card de cima - CORRIGIDO O LAYOUT */}
                     {isCompareMode && match?.isSubstitution && (
-                      <div className="-mt-3 pt-4 pb-1.5 px-3 bg-indigo-50 border-x border-b border-indigo-100 rounded-b-xl mx-1 text-[10px] text-indigo-700 flex justify-end items-center gap-1.5 shadow-sm">
-                        <span className="text-indigo-400">Substituiu:</span>
-                        <span className="font-medium truncate max-w-[200px]" title={`${item.products.name} ${item.products.brand ? `(${item.products.brand})` : ''}`}>
+                      <div className="-mt-3 pt-4 pb-1.5 px-3 bg-indigo-50 border-x border-b border-indigo-100 rounded-b-xl mx-1 text-[10px] text-indigo-700 flex justify-end items-center gap-1.5 shadow-sm overflow-hidden">
+                        <span className="text-indigo-400 shrink-0">Substituiu:</span>
+                        <span className="font-medium truncate max-w-[140px] sm:max-w-[200px] min-w-0" title={`${item.products.name} ${item.products.brand ? `(${item.products.brand})` : ''}`}>
                           {item.products.name} {item.products.brand ? `(${item.products.brand})` : ''}
                         </span>
                       </div>
@@ -1852,7 +1852,7 @@ export default function ListDetail() {
         onConfirm={handleReconciliationConfirm}
       />
 
-      {/* DIALOG DE CONFIRMAÇÃO DE SUBSTITUIÇÃO */}
+      {/* DIALOG DE CONFIRMAÇÃO DE SUBSTITUIÇÃO - CORRIGIDO LAYOUT */}
       <AlertDialog open={confirmUpdateDialogOpen} onOpenChange={setConfirmUpdateDialogOpen}>
         <AlertDialogContent className="w-[90%] max-w-sm mx-auto rounded-2xl p-6">
           <AlertDialogHeader>
@@ -1867,10 +1867,10 @@ export default function ListDetail() {
 
               <div className="bg-muted/50 rounded-xl p-3 max-h-[40vh] overflow-y-auto space-y-3 text-sm">
                 {substitutionsList.map((sub, idx) => (
-                  <div key={idx} className="flex items-center justify-between gap-2 border-b border-border/50 pb-2 last:border-0 last:pb-0">
-                    <span className="text-muted-foreground line-through flex-1 truncate text-xs">{sub.original}</span>
-                    <ArrowRight className="w-3 h-3 text-muted-foreground shrink-0" />
-                    <span className="font-medium text-foreground flex-1 text-right truncate text-xs">{sub.new}</span>
+                  <div key={idx} className="grid grid-cols-[1fr_auto_1fr] gap-2 items-center border-b border-border/50 pb-2 last:border-0 last:pb-0">
+                    <span className="text-muted-foreground line-through text-xs break-words">{sub.original}</span>
+                    <ArrowRight className="w-3 h-3 text-muted-foreground shrink-0 mx-auto" />
+                    <span className="font-medium text-foreground text-right text-xs break-words">{sub.new}</span>
                   </div>
                 ))}
               </div>
