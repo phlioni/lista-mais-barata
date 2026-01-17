@@ -19,6 +19,9 @@ import {
   Save,
   Camera,
   QrCode,
+  Sparkles,
+  ArrowRight,
+  RefreshCw
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -116,6 +119,13 @@ interface ItemPrice {
   [itemId: string]: number;
 }
 
+interface SmartMatchDetail {
+  matchedProductId: string;
+  matchedProductName: string;
+  matchedProductBrand: string | null;
+  isSubstitution: boolean;
+}
+
 export default function ListDetail() {
   const params = useParams();
   const routeId = params.id;
@@ -143,6 +153,7 @@ export default function ListDetail() {
   const [addDialogOpen, setAddDialogOpen] = useState(false);
   const [duplicateDialogOpen, setDuplicateDialogOpen] = useState(false);
   const [finishDialogOpen, setFinishDialogOpen] = useState(false);
+  const [confirmUpdateDialogOpen, setConfirmUpdateDialogOpen] = useState(false);
 
   const [editNameDialogOpen, setEditNameDialogOpen] = useState(false);
   const [deleteListDialogOpen, setDeleteListDialogOpen] = useState(false);
@@ -169,6 +180,9 @@ export default function ListDetail() {
   const [isShoppingMode, setIsShoppingMode] = useState(false);
   const [selectedMarket, setSelectedMarket] = useState<Market | null>(null);
   const [itemPrices, setItemPrices] = useState<ItemPrice>({});
+
+  const [smartMatches, setSmartMatches] = useState<Record<string, SmartMatchDetail>>({});
+
   const [saving, setSaving] = useState(false);
   const [startingShopping, setStartingShopping] = useState(false);
 
@@ -201,7 +215,7 @@ export default function ListDetail() {
         await Promise.all([fetchListData(), fetchProducts()]);
 
         if (routeMarketId) {
-          await loadMarketData(routeMarketId, false, true);
+          await loadSmartMarketData(routeMarketId);
         }
 
         setLoading(false);
@@ -216,8 +230,9 @@ export default function ListDetail() {
           (payload) => {
             const currentMarketId =
               routeMarketId || list?.market_id || selectedMarket?.id;
+
             if (
-              isCompareMode &&
+              !isCompareMode &&
               currentMarketId &&
               payload.new &&
               (payload.new as any).market_id === currentMarketId
@@ -348,6 +363,52 @@ export default function ListDetail() {
     }
   };
 
+  const loadSmartMarketData = async (targetMarketId: string) => {
+    try {
+      const { data: marketData, error: marketError } = await supabase
+        .from("markets")
+        .select("*")
+        .eq("id", targetMarketId)
+        .single();
+
+      if (marketError) throw marketError;
+      setSelectedMarket(marketData);
+
+      const { data, error } = await supabase.functions.invoke('smart-shopping-analysis', {
+        body: {
+          listId: id,
+          targetMarketId: targetMarketId,
+        }
+      });
+
+      if (error) throw error;
+      if (data.error) throw new Error(data.error);
+
+      const result = data.results && data.results[0];
+      if (result && result.matches) {
+        const newPrices: ItemPrice = {};
+        const newSmartMatches: Record<string, SmartMatchDetail> = {};
+
+        result.matches.forEach((match: any) => {
+          newPrices[match.listItemId] = match.matchedPrice;
+          newSmartMatches[match.listItemId] = {
+            matchedProductId: match.matchedProductId,
+            matchedProductName: match.matchedProductName,
+            matchedProductBrand: match.matchedProductBrand,
+            isSubstitution: match.isSubstitution
+          };
+        });
+
+        setItemPrices(newPrices);
+        setSmartMatches(newSmartMatches);
+      }
+
+    } catch (error) {
+      console.error("Error loading smart market data:", error);
+      loadMarketData(targetMarketId, false, true);
+    }
+  };
+
   const loadMarketData = async (
     targetMarketId: string,
     enableShoppingMode: boolean = false,
@@ -396,8 +457,6 @@ export default function ListDetail() {
         }
       }
 
-      // NOVO: Merge com LocalStorage para recuperar dados perdidos no refresh
-      // Prioridade: O que está no LocalStorage (sessão atual) sobrescreve o banco (histórico)
       if (id) {
         const localPricesJson = localStorage.getItem(`list_prices_${id}`);
         if (localPricesJson) {
@@ -463,7 +522,6 @@ export default function ListDetail() {
 
       if (error) throw error;
 
-      // Limpa lixo do localstorage se existir
       localStorage.removeItem(`list_prices_${id}`);
       navigate("/");
     } catch (error) {
@@ -1115,28 +1173,53 @@ export default function ListDetail() {
       return;
     }
 
+    // NOVA LÓGICA: Verifica se tem substituições para confirmar
+    const hasSubstitutions = Object.values(smartMatches).some(m => m.isSubstitution);
+    if (isCompareMode && hasSubstitutions) {
+      setConfirmUpdateDialogOpen(true);
+      return; // Interrompe e espera a confirmação do usuário
+    }
+
+    await proceedToStartShopping();
+  };
+
+  const proceedToStartShopping = async () => {
     setStartingShopping(true);
     try {
+      // Se estiver em modo Comparação e tiver substituições, aplica elas no banco
+      if (isCompareMode) {
+        const substitutions = Object.entries(smartMatches).filter(([_, val]) => val.isSubstitution);
+        if (substitutions.length > 0) {
+          // Atualiza cada item no banco para apontar para o novo produto
+          for (const [listItemId, match] of substitutions) {
+            await supabase
+              .from('list_items')
+              .update({ product_id: match.matchedProductId })
+              .eq('id', listItemId);
+          }
+        }
+      }
+
       const { error } = await supabase
         .from("shopping_lists")
         .update({
           status: "shopping",
-          market_id: selectedMarket.id,
+          market_id: selectedMarket!.id,
         })
-        .eq("id", id);
+        .eq("id", id!);
 
       if (error) throw error;
 
       setList((prev) =>
         prev
-          ? { ...prev, status: "shopping", market_id: selectedMarket.id }
+          ? { ...prev, status: "shopping", market_id: selectedMarket!.id }
           : null
       );
 
       setIsShoppingMode(true);
 
       const shouldLoadPrices = isCompareMode;
-      await loadMarketData(selectedMarket.id, true, shouldLoadPrices);
+      await loadMarketData(selectedMarket!.id, true, shouldLoadPrices);
 
       if (!shouldLoadPrices) {
         setItemPrices((prev) => {
@@ -1163,6 +1246,7 @@ export default function ListDetail() {
       });
     } finally {
       setStartingShopping(false);
+      setConfirmUpdateDialogOpen(false);
     }
   };
 
@@ -1346,6 +1430,17 @@ export default function ListDetail() {
       </div>
     );
   }
+
+  // Gera a lista de substituições para o Dialog
+  const substitutionsList = items
+    .filter(item => smartMatches[item.id]?.isSubstitution)
+    .map(item => {
+      const match = smartMatches[item.id];
+      return {
+        original: `${item.products.name} ${item.products.brand || ''}`,
+        new: `${match.matchedProductName} ${match.matchedProductBrand || ''}`
+      }
+    });
 
   return (
     <div
@@ -1596,24 +1691,53 @@ export default function ListDetail() {
                 Nenhum item encontrado para "{listFilter}"
               </div>
             ) : (
-              filteredListItems.map((item) => (
-                <ProductItem
-                  key={item.id}
-                  id={item.id}
-                  name={item.products.name}
-                  brand={item.products.brand || undefined}
-                  measurement={item.products.measurement}
-                  quantity={item.quantity}
-                  isChecked={item.is_checked}
-                  price={itemPrices[item.id]}
-                  showPriceInput={isShoppingMode && !isClosed && !isCompareMode}
-                  readonly={isClosed || isCompareMode}
-                  onToggleCheck={toggleCheck}
-                  onUpdateQuantity={updateQuantity}
-                  onUpdatePrice={updatePrice}
-                  onRemove={removeItem}
-                />
-              ))
+              filteredListItems.map((item) => {
+                const match = isCompareMode ? smartMatches[item.id] : null;
+                const displayName = match ? match.matchedProductName : item.products.name;
+                const displayBrand = match
+                  ? (match.matchedProductBrand || "")
+                  : (item.products.brand || "");
+
+                return (
+                  <div key={item.id} className="flex flex-col mb-2">
+                    {/* Container do Item - Fica por cima visualmente */}
+                    <div className="relative z-10">
+                      {isCompareMode && match?.isSubstitution && (
+                        <div className="absolute -top-2 right-2 z-20 bg-indigo-600 text-white text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1 shadow-md">
+                          <Sparkles className="w-3 h-3 text-yellow-300 fill-yellow-300" />
+                          Economia
+                        </div>
+                      )}
+
+                      <ProductItem
+                        id={item.id}
+                        name={displayName}
+                        brand={displayBrand}
+                        measurement={item.products.measurement}
+                        quantity={item.quantity}
+                        isChecked={item.is_checked}
+                        price={itemPrices[item.id]}
+                        showPriceInput={isShoppingMode && !isClosed && !isCompareMode}
+                        readonly={isClosed || isCompareMode}
+                        onToggleCheck={toggleCheck}
+                        onUpdateQuantity={updateQuantity}
+                        onUpdatePrice={updatePrice}
+                        onRemove={removeItem}
+                      />
+                    </div>
+
+                    {/* Feedback visual estilo "Gaveta" conectada ao card de cima */}
+                    {isCompareMode && match?.isSubstitution && (
+                      <div className="-mt-3 pt-4 pb-1.5 px-3 bg-indigo-50 border-x border-b border-indigo-100 rounded-b-xl mx-1 text-[10px] text-indigo-700 flex justify-end items-center gap-1.5 shadow-sm">
+                        <span className="text-indigo-400">Substituiu:</span>
+                        <span className="font-medium truncate max-w-[200px]" title={`${item.products.name} ${item.products.brand ? `(${item.products.brand})` : ''}`}>
+                          {item.products.name} {item.products.brand ? `(${item.products.brand})` : ''}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                );
+              })
             )}
           </div>
         )}
@@ -1728,7 +1852,57 @@ export default function ListDetail() {
         onConfirm={handleReconciliationConfirm}
       />
 
-      {/* DIALOGS */}
+      {/* DIALOG DE CONFIRMAÇÃO DE SUBSTITUIÇÃO */}
+      <AlertDialog open={confirmUpdateDialogOpen} onOpenChange={setConfirmUpdateDialogOpen}>
+        <AlertDialogContent className="w-[90%] max-w-sm mx-auto rounded-2xl p-6">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="font-display text-xl text-primary flex items-center gap-2">
+              <Sparkles className="w-5 h-5" />
+              Economia Inteligente
+            </AlertDialogTitle>
+            <AlertDialogDescription className="space-y-3 pt-2">
+              <p>
+                Para garantir o preço total estimado, atualizaremos sua lista com as opções mais baratas encontradas neste mercado:
+              </p>
+
+              <div className="bg-muted/50 rounded-xl p-3 max-h-[40vh] overflow-y-auto space-y-3 text-sm">
+                {substitutionsList.map((sub, idx) => (
+                  <div key={idx} className="flex items-center justify-between gap-2 border-b border-border/50 pb-2 last:border-0 last:pb-0">
+                    <span className="text-muted-foreground line-through flex-1 truncate text-xs">{sub.original}</span>
+                    <ArrowRight className="w-3 h-3 text-muted-foreground shrink-0" />
+                    <span className="font-medium text-foreground flex-1 text-right truncate text-xs">{sub.new}</span>
+                  </div>
+                ))}
+              </div>
+
+              <p className="text-xs text-muted-foreground">
+                Sua lista será atualizada permanentemente com esses novos produtos.
+              </p>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter className="flex-row gap-3 space-x-0 mt-4">
+            <AlertDialogCancel
+              disabled={startingShopping}
+              className="flex-1 h-12 rounded-xl mt-0"
+            >
+              Cancelar
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={proceedToStartShopping}
+              disabled={startingShopping}
+              className="flex-1 h-12 rounded-xl"
+            >
+              {startingShopping ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                "Atualizar e Iniciar"
+              )}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* OUTROS DIALOGS (MANTIDOS) */}
       <Dialog open={editNameDialogOpen} onOpenChange={setEditNameDialogOpen}>
         <DialogContent className="w-[90%] max-w-sm mx-auto rounded-2xl p-6">
           <DialogHeader>

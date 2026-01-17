@@ -17,6 +17,7 @@ interface MarketResult {
   totalPrice: number;
   distance: number;
   missingItems: number;
+  substitutedItems: number; // NOVO CAMPO
   totalItems: number;
   coveragePercent: number;
   realCost: number;
@@ -243,6 +244,7 @@ export default function Compare() {
                     totalPrice={result.totalPrice}
                     distance={result.distance}
                     missingItems={result.missingItems}
+                    substitutedItems={result.substitutedItems} // PASSANDO A NOVA PROPRIEDADE
                     rank={index + 1}
                     isRecommended={result.isRecommended}
                     lastUpdate={result.lastUpdate}
