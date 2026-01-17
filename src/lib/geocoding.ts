@@ -61,3 +61,40 @@ export async function getAddressFromCoordinates(lat: number, lng: number): Promi
     return null;
   }
 }
+
+export async function checkLocationEligibility(lat: number, lng: number): Promise<{ eligible: boolean; city: string }> {
+  try {
+    const response = await fetch(
+      `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=10&addressdetails=1`,
+      {
+        headers: {
+          'User-Agent': 'ListaMaisBarataApp/1.0',
+          'Accept-Language': 'pt-BR'
+        }
+      }
+    );
+
+    if (!response.ok) return { eligible: false, city: 'Desconhecida' };
+
+    const data = await response.json();
+
+    if (data && data.address) {
+      // Normaliza o nome da cidade para comparação
+      const city = data.address.city || data.address.town || data.address.municipality || 'Desconhecida';
+      const cleanCity = city.toLowerCase().trim();
+
+      const isSantos = cleanCity === 'santos';
+      const isSaoVicente = cleanCity === 'são vicente' || cleanCity === 'sao vicente';
+
+      return {
+        eligible: isSantos || isSaoVicente,
+        city: city
+      };
+    }
+
+    return { eligible: false, city: 'Desconhecida' };
+  } catch (error) {
+    console.error("Error checking eligibility:", error);
+    return { eligible: false, city: 'Erro' };
+  }
+}
