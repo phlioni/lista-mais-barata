@@ -1,4 +1,4 @@
-import { MapPin, Navigation, Star, AlertCircle, Clock } from "lucide-react";
+import { MapPin, Navigation, Star, AlertCircle, Clock, Sparkles } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { useNavigate } from "react-router-dom";
@@ -11,9 +11,10 @@ interface MarketCardProps {
   totalPrice: number;
   distance: number;
   missingItems: number;
+  substitutedItems?: number; // Novo campo opcional
   rank: number;
   isRecommended: boolean;
-  lastUpdate: string; // Novo campo
+  lastUpdate: string;
 }
 
 export function MarketCard({
@@ -24,6 +25,7 @@ export function MarketCard({
   totalPrice,
   distance,
   missingItems,
+  substitutedItems = 0,
   rank,
   isRecommended,
   lastUpdate
@@ -98,13 +100,25 @@ export function MarketCard({
           </div>
         </div>
 
-        {/* Alertas de Itens Faltantes */}
-        {missingItems > 0 && (
-          <div className="flex items-center gap-2 bg-destructive/10 text-destructive px-3 py-2 rounded-lg text-xs font-medium mb-4">
-            <AlertCircle className="w-4 h-4 shrink-0" />
-            {missingItems} {missingItems === 1 ? "produto indisponível" : "produtos indisponíveis"} neste mercado
-          </div>
-        )}
+        {/* ÁREA DE ALERTAS INTELIGENTES */}
+        <div className="space-y-2 mb-4">
+
+          {/* Alerta de Substituição Inteligente (Novidade) */}
+          {substitutedItems > 0 && (
+            <div className="flex items-center gap-2 bg-indigo-50 text-indigo-700 border border-indigo-100 px-3 py-2 rounded-lg text-xs font-medium">
+              <Sparkles className="w-4 h-4 shrink-0 fill-indigo-200" />
+              {substitutedItems} {substitutedItems === 1 ? "item otimizado" : "itens otimizados"} com marcas mais baratas
+            </div>
+          )}
+
+          {/* Alertas de Itens Faltantes */}
+          {missingItems > 0 && (
+            <div className="flex items-center gap-2 bg-destructive/10 text-destructive px-3 py-2 rounded-lg text-xs font-medium">
+              <AlertCircle className="w-4 h-4 shrink-0" />
+              {missingItems} {missingItems === 1 ? "produto indisponível" : "produtos indisponíveis"}
+            </div>
+          )}
+        </div>
 
         {/* Footer com Data e Ação */}
         <div className="flex items-center justify-between gap-3 pt-3 border-t border-border/50">

@@ -7,8 +7,8 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-// Função para calcular distância (Haversine)
 function calculateDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  if (!lat1 || !lon1 || !lat2 || !lon2) return 0;
   const R = 6371;
   const dLat = (lat2 - lat1) * Math.PI / 180;
   const dLon = (lon2 - lon1) * Math.PI / 180;
@@ -28,9 +28,9 @@ serve(async (req) => {
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
     );
 
-    const { listId, userLocation, radius } = await req.json();
+    const { listId, userLocation, radius, targetMarketId } = await req.json();
 
-    if (!listId || !userLocation) throw new Error("Dados incompletos");
+    if (!listId) throw new Error("ID da lista obrigatório");
 
     // 1. Buscar Itens da Lista
     const { data: listItems, error: listError } = await supabase
@@ -44,27 +44,42 @@ serve(async (req) => {
     if (listError) throw listError;
     if (!listItems?.length) throw new Error("Lista vazia");
 
-    // 2. Buscar Mercados no Raio
-    const { data: allMarkets, error: marketsError } = await supabase
-      .from("markets")
-      .select("*");
+    // 2. Definir quais mercados analisar
+    let marketsToAnalyze = [];
 
-    if (marketsError) throw marketsError;
+    if (targetMarketId) {
+      // Modo Detalhe: Analisa apenas um mercado específico (ignora raio)
+      const { data: market, error: mError } = await supabase
+        .from("markets")
+        .select("*")
+        .eq("id", targetMarketId)
+        .single();
+      if (mError) throw mError;
+      marketsToAnalyze = [market];
+    } else {
+      // Modo Comparação Geral: Usa raio
+      if (!userLocation) throw new Error("Localização necessária para busca por raio");
 
-    const marketsInRadius = allMarkets.filter(m => {
-      const dist = calculateDistance(userLocation.lat, userLocation.lng, m.latitude, m.longitude);
-      return dist <= radius;
-    });
+      const { data: allMarkets, error: marketsError } = await supabase
+        .from("markets")
+        .select("*");
+      if (marketsError) throw marketsError;
 
-    if (marketsInRadius.length === 0) {
+      marketsToAnalyze = allMarkets.filter(m => {
+        const dist = calculateDistance(userLocation.lat, userLocation.lng, m.latitude, m.longitude);
+        return dist <= radius;
+      });
+    }
+
+    if (marketsToAnalyze.length === 0) {
       return new Response(JSON.stringify({ success: true, results: [] }), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' }
       });
     }
 
-    const marketIds = marketsInRadius.map(m => m.id);
+    const marketIds = marketsToAnalyze.map(m => m.id);
 
-    // 3. Buscar PREÇOS (Fonte da Verdade)
+    // 3. Buscar Preços
     const { data: allPrices, error: pricesError } = await supabase
       .from("market_prices")
       .select(`
@@ -75,55 +90,66 @@ serve(async (req) => {
 
     if (pricesError) throw pricesError;
 
-    // 4. Cruzamento Inteligente com Travas de Segurança
-    const results = marketsInRadius.map(market => {
-      const distance = calculateDistance(userLocation.lat, userLocation.lng, market.latitude, market.longitude);
+    // 4. Análise Inteligente
+    const results = marketsToAnalyze.map(market => {
+      const distance = userLocation
+        ? calculateDistance(userLocation.lat, userLocation.lng, market.latitude, market.longitude)
+        : 0;
 
-      // Filtra APENAS preços deste mercado
       const marketPrices = allPrices.filter(p => p.market_id === market.id);
 
-      // Configura Fuzzy Search mais restrito (0.2 = bem exigente)
       const marketProductsSearch = new Fuse(marketPrices, {
-        keys: ["products.name"], // Busca foca no nome
-        threshold: 0.2, // Reduzido de 0.4 para 0.2 para evitar falsos positivos
+        keys: ["products.name"],
+        threshold: 0.3,
         includeScore: true
       });
 
       let totalPrice = 0;
       let missingItems = 0;
+      let substitutedItems = 0;
       let foundPriceDates: string[] = [];
+      const matches: any[] = [];
 
       listItems.forEach(item => {
         const targetId = item.products.id;
         const targetName = item.products.name;
         const targetBrand = item.products.brand?.toLowerCase().trim();
 
-        // A. Tentativa Exata (Pelo ID do produto) - Prioridade Máxima
-        let match = marketPrices.find(p => p.product_id === targetId);
+        let match = null;
+        let isSubstitution = false;
+        let matchType = 'missing';
 
-        // B. Tentativa Inteligente (Se não achou exato)
-        if (!match) {
+        // A. Match Exato
+        const exactMatch = marketPrices.find(p => p.product_id === targetId);
+
+        if (exactMatch) {
+          match = exactMatch;
+          matchType = 'exact';
+        } else {
+          // B. Match Inteligente
           const searchResult = marketProductsSearch.search(targetName);
+          const candidates = searchResult
+            .filter(res => res.score !== undefined && res.score < 0.4)
+            .map(res => res.item);
 
-          if (searchResult.length > 0) {
-            const bestMatch = searchResult[0];
-            const candidate = bestMatch.item.products;
-            const candidateBrand = candidate.brand?.toLowerCase().trim();
-
-            // TRAVA DE SEGURANÇA DE MARCA
-            // Se ambos tem marca definida e elas são diferentes, REJEITA.
-            // (Evita que Leite Parmalat dê match com Leite Ninho)
-            let brandMismatch = false;
-            if (targetBrand && candidateBrand) {
-              // Verifica se as marcas são diferentes (tolerando substring ex: "Coca" e "Coca-Cola")
-              if (!candidateBrand.includes(targetBrand) && !targetBrand.includes(candidateBrand)) {
-                brandMismatch = true;
+          if (candidates.length > 0) {
+            if (targetBrand) {
+              const brandMatch = candidates.find(c =>
+                c.products.brand?.toLowerCase().trim().includes(targetBrand)
+              );
+              if (brandMatch) {
+                match = brandMatch;
+                matchType = 'brand_variant';
+              } else {
+                candidates.sort((a, b) => a.price - b.price);
+                match = candidates[0];
+                isSubstitution = true;
+                matchType = 'cheapest_sub';
               }
-            }
-
-            // Se a marca bater (ou um deles não tiver marca) E a medida bater (opcional), aceita
-            if (!brandMismatch) {
-              match = bestMatch.item;
+            } else {
+              candidates.sort((a, b) => a.price - b.price);
+              match = candidates[0];
+              matchType = 'generic_best';
             }
           }
         }
@@ -131,6 +157,18 @@ serve(async (req) => {
         if (match) {
           totalPrice += match.price * item.quantity;
           foundPriceDates.push(match.created_at);
+          if (isSubstitution) substitutedItems++;
+
+          matches.push({
+            listItemId: item.id,
+            matchedProductId: match.products.id,
+            matchedProductName: match.products.name,
+            matchedProductBrand: match.products.brand,
+            matchedPrice: match.price,
+            originalName: targetName,
+            isSubstitution,
+            matchType
+          });
         } else {
           missingItems++;
         }
@@ -142,10 +180,7 @@ serve(async (req) => {
         lastUpdate = foundPriceDates[0];
       }
 
-      // Se o mercado não tem nenhum item da lista, ignoramos o preço total
-      if (listItems.length === missingItems) {
-        totalPrice = 0;
-      }
+      if (listItems.length === missingItems) totalPrice = 0;
 
       const coveragePercent = Math.round(((listItems.length - missingItems) / listItems.length) * 100);
       const travelCost = distance * 2 * 1.5;
@@ -158,31 +193,34 @@ serve(async (req) => {
         totalPrice,
         distance,
         missingItems,
+        substitutedItems,
         totalItems: listItems.length,
         coveragePercent,
         realCost,
         isRecommended: false,
-        lastUpdate
+        lastUpdate,
+        matches
       };
     });
 
-    // Ordenação e Recomendação
-    const viableMarkets = results
-      .filter(m => m.totalPrice > 0 && m.coveragePercent > 0) // Só mostra se tiver pelo menos 1 item
-      .sort((a, b) => {
-        // Prioriza quem tem mais itens (menos faltantes)
+    // FILTRAGEM E ORDENAÇÃO (CORREÇÃO APLICADA AQUI)
+    let finalResults = results;
+
+    if (!targetMarketId) {
+      // Remove mercados zerados ou sem itens na busca geral
+      finalResults = results.filter(m => m.totalPrice > 0 && m.coveragePercent > 0);
+
+      finalResults.sort((a, b) => {
         if (a.missingItems !== b.missingItems) return a.missingItems - b.missingItems;
-        // Depois quem é mais barato (custo real)
         return a.realCost - b.realCost;
       });
 
-    if (viableMarkets.length > 0) {
-      viableMarkets[0].isRecommended = true;
+      if (finalResults.length > 0) finalResults[0].isRecommended = true;
     }
 
     return new Response(JSON.stringify({
       success: true,
-      results: viableMarkets
+      results: finalResults
     }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
