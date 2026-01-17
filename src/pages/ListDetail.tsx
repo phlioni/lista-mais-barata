@@ -59,6 +59,7 @@ import {
   ScanResult,
 } from "@/components/ReceiptReconciliation";
 import { Scanner } from "@yudiel/react-qr-scanner";
+import { MagicPasteImport } from "@/components/MagicPasteImport";
 
 // Helper para timeout seguro
 const safeInvoke = async <T,>(promise: Promise<T>, ms: number, fallback: T): Promise<T> => {
@@ -1549,13 +1550,16 @@ export default function ListDetail() {
             action={
               !isClosed &&
               !isCompareMode && (
-                <Button
-                  onClick={() => setAddDialogOpen(true)}
-                  className="h-12 px-6 rounded-xl"
-                >
-                  <Plus className="w-5 h-5 mr-2" />
-                  Adicionar Produto
-                </Button>
+                <div className="flex flex-col gap-3 w-full items-center">
+                  <Button
+                    onClick={() => setAddDialogOpen(true)}
+                    className="h-12 px-6 rounded-xl w-full sm:w-auto"
+                  >
+                    <Plus className="w-5 h-5 mr-2" />
+                    Adicionar Produto
+                  </Button>
+                  {id && <MagicPasteImport listId={id} onSuccess={fetchListData} />}
+                </div>
               )
             }
           />
@@ -1934,7 +1938,19 @@ export default function ListDetail() {
                   )}
                 </DialogTitle>
               </DialogHeader>
-              <div className="p-4 pb-2 bg-background z-10">
+              <div className="p-4 pb-2 bg-background z-10 space-y-3">
+                {/* BOTÃO DE IMPORTAÇÃO MÁGICA - Visível aqui para quem já tem itens na lista */}
+                {id && (
+                  <div className="w-full">
+                    <MagicPasteImport
+                      listId={id}
+                      onSuccess={() => {
+                        fetchListData();
+                        setAddDialogOpen(false); // Fecha o diálogo para mostrar a mágica na lista
+                      }}
+                    />
+                  </div>
+                )}
                 <div className="relative">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground" />
                   <Input
