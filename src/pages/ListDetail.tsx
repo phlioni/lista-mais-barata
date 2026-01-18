@@ -1336,8 +1336,26 @@ export default function ListDetail() {
           : null
       );
 
-      // NOVO: Limpa o LocalStorage ao finalizar com sucesso
+      // Limpa o LocalStorage ao finalizar com sucesso
       localStorage.removeItem(`list_prices_${id}`);
+
+      // --- NOVA PARTE: TENTAR PONTUAR ---
+      const { data: pointsResult, error: pointsError } = await supabase.rpc('award_weekly_points');
+
+      if (!pointsError && pointsResult) {
+        // Mostra Toast personalizado dependendo se ganhou ou se já tinha ganho
+        toast({
+          title: pointsResult.success ? "🎉 Lista Finalizada & Pontos!" : "Lista Finalizada!",
+          description: pointsResult.message,
+          // Se ganhou pontos, dura mais tempo e é verde (default), se não, normal
+          duration: pointsResult.success ? 6000 : 4000,
+          className: pointsResult.success ? "border-green-500 bg-green-50" : ""
+        });
+      } else {
+        // Fallback se der erro na pontuação (mas a lista finalizou)
+        toast({ title: "Lista Finalizada com Sucesso!" });
+      }
+      // ----------------------------------
 
       setFinishDialogOpen(false);
       setIsShoppingMode(false);
@@ -1726,7 +1744,7 @@ export default function ListDetail() {
                       />
                     </div>
 
-                    {/* Feedback visual estilo "Gaveta" conectada ao card de cima - CORRIGIDO O LAYOUT */}
+                    {/* Feedback visual estilo "Gaveta" conectada ao card de cima */}
                     {isCompareMode && match?.isSubstitution && (
                       <div className="-mt-3 pt-4 pb-1.5 px-3 bg-indigo-50 border-x border-b border-indigo-100 rounded-b-xl mx-1 text-[10px] text-indigo-700 flex justify-end items-center gap-1.5 shadow-sm overflow-hidden">
                         <span className="text-indigo-400 shrink-0">Substituiu:</span>
@@ -1818,14 +1836,16 @@ export default function ListDetail() {
                   <X className="w-5 h-5" />
                 </Button>
 
-                {/* <Button
+                {/* Botão QR Code comentado conforme solicitado
+                <Button
                   onClick={() => setIsQRScanning(true)}
                   variant="secondary"
                   className="w-14 shrink-0 h-14 rounded-xl border border-primary/20"
                   title="Escanear QR Code NFC-e"
                 >
                   <QrCode className="w-5 h-5 text-primary" />
-                </Button> */}
+                </Button>
+                */}
 
                 <Button
                   onClick={() => setFinishDialogOpen(true)}
@@ -1852,7 +1872,7 @@ export default function ListDetail() {
         onConfirm={handleReconciliationConfirm}
       />
 
-      {/* DIALOG DE CONFIRMAÇÃO DE SUBSTITUIÇÃO - CORRIGIDO LAYOUT */}
+      {/* DIALOG DE CONFIRMAÇÃO DE SUBSTITUIÇÃO */}
       <AlertDialog open={confirmUpdateDialogOpen} onOpenChange={setConfirmUpdateDialogOpen}>
         <AlertDialogContent className="w-[90%] max-w-sm mx-auto rounded-2xl p-6">
           <AlertDialogHeader>

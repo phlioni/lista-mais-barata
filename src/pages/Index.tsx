@@ -1,8 +1,8 @@
 import { useState, useEffect } from "react";
-import { Plus, ShoppingBag, Loader2 } from "lucide-react";
+import { Plus, ShoppingBag, Loader2, ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { PageHeader } from "@/components/PageHeader";
-import { AppMenu } from "@/components/AppMenu"; // Novo menu
+import { AppMenu } from "@/components/AppMenu";
 import { ListCard } from "@/components/ListCard";
 import { EmptyState } from "@/components/EmptyState";
 import { useAuth } from "@/hooks/useAuth";
@@ -133,19 +133,29 @@ export default function Index() {
   }
 
   return (
-    <div className="min-h-screen bg-background pb-8">
-      {/* Header Atualizado com Menu Lateral */}
+    <div className="min-h-screen bg-background pb-20">
+      {/* Header Atualizado com Botão Voltar */}
       <div className="flex items-center justify-between px-4 py-4 max-w-md mx-auto sticky top-0 z-30 bg-background/90 backdrop-blur-md border-b border-border">
-        <div>
-          <h1 className="text-2xl font-display font-bold text-foreground">Minhas Listas</h1>
-          <p className="text-sm text-muted-foreground">Gerencie suas compras</p>
+        <div className="flex items-center gap-3">
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => navigate("/")} // Volta para a Gamificação (Home)
+            className="-ml-2"
+          >
+            <ArrowLeft className="w-5 h-5 text-muted-foreground" />
+          </Button>
+          <div>
+            <h1 className="text-xl font-display font-bold text-foreground">Minhas Listas</h1>
+            <p className="text-xs text-muted-foreground">Gerencie suas compras</p>
+          </div>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1">
           <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
             <DialogTrigger asChild>
-              <Button size="icon" variant="secondary" className="text-primary h-10 w-10 rounded-xl">
-                <Plus className="w-6 h-6" />
+              <Button size="icon" variant="secondary" className="text-primary h-9 w-9 rounded-xl">
+                <Plus className="w-5 h-5" />
               </Button>
             </DialogTrigger>
             <DialogContent className="w-[90%] max-w-sm mx-auto rounded-2xl p-6">
