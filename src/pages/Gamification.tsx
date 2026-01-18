@@ -10,7 +10,8 @@ import {
     Flame,
     Medal,
     Loader2,
-    Settings // Novo ícone
+    Settings,
+    Users
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -22,8 +23,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 
 interface LeaderboardItem {
     user_id: string;
-    display_name: string; // Atualizado
-    avatar_url?: string;  // Atualizado
+    display_name: string;
+    avatar_url?: string;
     total_points: number;
     rank: number;
 }
@@ -56,13 +57,13 @@ export default function Gamification() {
             const ranking = rankingData || [];
             setLeaderboard(ranking);
 
-            // 2. BUSCA SEGURA DE PONTOS (Correção do bug)
+            // 2. BUSCA SEGURA DE PONTOS
             const { data: pointsData, error: pointsError } = await supabase.rpc('get_my_monthly_points');
             if (!pointsError) {
                 setMyPoints(pointsData || 0);
             }
 
-            // 3. Buscar perfil atualizado (Nome e Foto)
+            // 3. Buscar perfil atualizado
             const { data: profileData } = await supabase
                 .from('profiles')
                 .select('display_name, avatar_url')
@@ -115,7 +116,7 @@ export default function Gamification() {
                         <Button
                             variant="ghost"
                             size="icon"
-                            onClick={() => navigate("/configuracoes")} // Link para Configurações
+                            onClick={() => navigate("/configuracoes")}
                             className="text-white/80 hover:text-white hover:bg-white/10"
                         >
                             <Settings className="w-6 h-6" />
@@ -181,67 +182,81 @@ export default function Gamification() {
                     </div>
                 </div>
 
-                {/* Podium Section */}
-                <div className="px-4 mb-6">
-                    <div className="flex items-end justify-center gap-3 h-48">
-                        {/* 2º Lugar */}
-                        <div className="flex flex-col items-center gap-2 w-1/3">
-                            <div className="relative">
-                                <Avatar className="w-14 h-14 border-4 border-slate-300 shadow-lg">
-                                    <AvatarImage src={topThree[1]?.avatar_url} />
-                                    <AvatarFallback>2</AvatarFallback>
-                                </Avatar>
-                                <div className="absolute -bottom-2 inset-x-0 flex justify-center">
-                                    <span className="bg-slate-300 text-slate-800 text-[10px] font-bold px-2 py-0.5 rounded-full shadow-sm">2º</span>
+                {/* Podium Section - Top 3 */}
+                {topThree.length > 0 && (
+                    <div className="px-4 mb-6">
+                        <div className="flex items-end justify-center gap-3 h-48">
+                            {/* 2º Lugar */}
+                            <div className="flex flex-col items-center gap-2 w-1/3">
+                                <div className="relative">
+                                    <Avatar className="w-14 h-14 border-4 border-slate-300 shadow-lg">
+                                        <AvatarImage src={topThree[1]?.avatar_url} />
+                                        <AvatarFallback className="bg-slate-200 text-slate-500">2</AvatarFallback>
+                                    </Avatar>
+                                    {topThree[1] && (
+                                        <div className="absolute -bottom-2 inset-x-0 flex justify-center">
+                                            <span className="bg-slate-300 text-slate-800 text-[10px] font-bold px-2 py-0.5 rounded-full shadow-sm">2º</span>
+                                        </div>
+                                    )}
                                 </div>
+                                {topThree[1] ? (
+                                    <div className="h-24 w-full bg-slate-300/20 backdrop-blur-sm rounded-t-2xl border-t border-x border-white/20 flex flex-col items-center justify-end p-2 relative overflow-hidden">
+                                        <div className="absolute inset-0 bg-gradient-to-t from-slate-900/40 to-transparent" />
+                                        <p className="text-white font-bold relative z-10 text-sm truncate w-full text-center">{topThree[1].display_name}</p>
+                                        <p className="text-slate-200 text-xs relative z-10">{topThree[1].total_points}</p>
+                                    </div>
+                                ) : (
+                                    <div className="h-24 w-full opacity-0" /> /* Placeholder invisível para manter layout */
+                                )}
                             </div>
-                            <div className="h-24 w-full bg-slate-300/20 backdrop-blur-sm rounded-t-2xl border-t border-x border-white/20 flex flex-col items-center justify-end p-2 relative overflow-hidden">
-                                <div className="absolute inset-0 bg-gradient-to-t from-slate-900/40 to-transparent" />
-                                <p className="text-white font-bold relative z-10 text-sm truncate w-full text-center">{topThree[1]?.display_name || "---"}</p>
-                                <p className="text-slate-200 text-xs relative z-10">{topThree[1]?.total_points || 0}</p>
-                            </div>
-                        </div>
 
-                        {/* 1º Lugar */}
-                        <div className="flex flex-col items-center gap-2 w-1/3 relative -top-2">
-                            <Crown className="w-8 h-8 text-yellow-300 fill-yellow-300 animate-bounce absolute -top-10" />
-                            <div className="relative">
-                                <Avatar className="w-20 h-20 border-4 border-yellow-400 shadow-xl ring-4 ring-yellow-400/20">
-                                    <AvatarImage src={topThree[0]?.avatar_url} />
-                                    <AvatarFallback>1</AvatarFallback>
-                                </Avatar>
-                                <div className="absolute -bottom-3 inset-x-0 flex justify-center">
-                                    <span className="bg-yellow-400 text-yellow-900 text-xs font-bold px-3 py-0.5 rounded-full shadow-md">1º</span>
+                            {/* 1º Lugar */}
+                            <div className="flex flex-col items-center gap-2 w-1/3 relative -top-2">
+                                <Crown className="w-8 h-8 text-yellow-300 fill-yellow-300 animate-bounce absolute -top-10" />
+                                <div className="relative">
+                                    <Avatar className="w-20 h-20 border-4 border-yellow-400 shadow-xl ring-4 ring-yellow-400/20">
+                                        <AvatarImage src={topThree[0]?.avatar_url} />
+                                        <AvatarFallback className="bg-yellow-100 text-yellow-600">1</AvatarFallback>
+                                    </Avatar>
+                                    <div className="absolute -bottom-3 inset-x-0 flex justify-center">
+                                        <span className="bg-yellow-400 text-yellow-900 text-xs font-bold px-3 py-0.5 rounded-full shadow-md">1º</span>
+                                    </div>
+                                </div>
+                                <div className="h-32 w-full bg-gradient-to-b from-yellow-400/30 to-yellow-600/10 backdrop-blur-md rounded-t-2xl border-t border-x border-yellow-400/30 flex flex-col items-center justify-end p-3 relative overflow-hidden shadow-[0_0_30px_rgba(250,204,21,0.2)]">
+                                    <div className="absolute inset-0 bg-gradient-to-t from-yellow-900/40 to-transparent" />
+                                    <p className="text-white font-bold relative z-10 text-base truncate w-full text-center">{topThree[0]?.display_name}</p>
+                                    <p className="text-yellow-100 text-sm relative z-10 font-medium">{topThree[0]?.total_points} pts</p>
                                 </div>
                             </div>
-                            <div className="h-32 w-full bg-gradient-to-b from-yellow-400/30 to-yellow-600/10 backdrop-blur-md rounded-t-2xl border-t border-x border-yellow-400/30 flex flex-col items-center justify-end p-3 relative overflow-hidden shadow-[0_0_30px_rgba(250,204,21,0.2)]">
-                                <div className="absolute inset-0 bg-gradient-to-t from-yellow-900/40 to-transparent" />
-                                <p className="text-white font-bold relative z-10 text-base truncate w-full text-center">{topThree[0]?.display_name || "Vago"}</p>
-                                <p className="text-yellow-100 text-sm relative z-10 font-medium">{topThree[0]?.total_points || 0} pts</p>
-                            </div>
-                        </div>
 
-                        {/* 3º Lugar */}
-                        <div className="flex flex-col items-center gap-2 w-1/3">
-                            <div className="relative">
-                                <Avatar className="w-14 h-14 border-4 border-orange-400 shadow-lg">
-                                    <AvatarImage src={topThree[2]?.avatar_url} />
-                                    <AvatarFallback>3</AvatarFallback>
-                                </Avatar>
-                                <div className="absolute -bottom-2 inset-x-0 flex justify-center">
-                                    <span className="bg-orange-400 text-orange-900 text-[10px] font-bold px-2 py-0.5 rounded-full shadow-sm">3º</span>
+                            {/* 3º Lugar */}
+                            <div className="flex flex-col items-center gap-2 w-1/3">
+                                <div className="relative">
+                                    <Avatar className="w-14 h-14 border-4 border-orange-400 shadow-lg">
+                                        <AvatarImage src={topThree[2]?.avatar_url} />
+                                        <AvatarFallback className="bg-orange-100 text-orange-600">3</AvatarFallback>
+                                    </Avatar>
+                                    {topThree[2] && (
+                                        <div className="absolute -bottom-2 inset-x-0 flex justify-center">
+                                            <span className="bg-orange-400 text-orange-900 text-[10px] font-bold px-2 py-0.5 rounded-full shadow-sm">3º</span>
+                                        </div>
+                                    )}
                                 </div>
-                            </div>
-                            <div className="h-20 w-full bg-orange-700/20 backdrop-blur-sm rounded-t-2xl border-t border-x border-white/20 flex flex-col items-center justify-end p-2 relative overflow-hidden">
-                                <div className="absolute inset-0 bg-gradient-to-t from-orange-900/40 to-transparent" />
-                                <p className="text-white font-bold relative z-10 text-sm truncate w-full text-center">{topThree[2]?.display_name || "---"}</p>
-                                <p className="text-orange-200 text-xs relative z-10">{topThree[2]?.total_points || 0}</p>
+                                {topThree[2] ? (
+                                    <div className="h-20 w-full bg-orange-700/20 backdrop-blur-sm rounded-t-2xl border-t border-x border-white/20 flex flex-col items-center justify-end p-2 relative overflow-hidden">
+                                        <div className="absolute inset-0 bg-gradient-to-t from-orange-900/40 to-transparent" />
+                                        <p className="text-white font-bold relative z-10 text-sm truncate w-full text-center">{topThree[2].display_name}</p>
+                                        <p className="text-orange-200 text-xs relative z-10">{topThree[2].total_points}</p>
+                                    </div>
+                                ) : (
+                                    <div className="h-20 w-full opacity-0" />
+                                )}
                             </div>
                         </div>
                     </div>
-                </div>
+                )}
 
-                {/* Lista Restante */}
+                {/* Lista Restante (4º em diante) */}
                 <div className="flex-1 bg-card rounded-t-[2.5rem] shadow-[0_-10px_40px_rgba(0,0,0,0.1)] -mt-4 relative z-20 pb-24 overflow-hidden flex flex-col">
                     <div className="p-6 pb-2">
                         <h3 className="text-lg font-bold text-foreground flex items-center gap-2">
@@ -253,11 +268,22 @@ export default function Gamification() {
                     <div className="overflow-y-auto flex-1 px-4 space-y-3 pb-4 scrollbar-hide">
                         {loading ? (
                             [1, 2, 3].map(i => <Skeleton key={i} className="h-16 w-full rounded-2xl" />)
-                        ) : restOfList.length === 0 && topThree.length === 0 ? (
-                            <div className="text-center py-10 text-muted-foreground">
-                                <Medal className="w-12 h-12 mx-auto mb-3 opacity-20" />
-                                <p>O ranking recomeçou este mês.<br />Seja o primeiro!</p>
-                            </div>
+                        ) : restOfList.length === 0 ? (
+                            // ESTADO VAZIO INTELIGENTE (Quando só tem gente no pódio)
+                            topThree.length > 0 ? (
+                                <div className="text-center py-12 px-6 opacity-60">
+                                    <Users className="w-12 h-12 mx-auto mb-3 text-muted-foreground/50" />
+                                    <p className="text-sm font-medium text-foreground">O topo está solitário!</p>
+                                    <p className="text-xs text-muted-foreground mt-1">
+                                        Novos competidores aparecerão aqui a partir do 4º lugar.
+                                    </p>
+                                </div>
+                            ) : (
+                                <div className="text-center py-10 text-muted-foreground">
+                                    <Medal className="w-12 h-12 mx-auto mb-3 opacity-20" />
+                                    <p>O ranking recomeçou este mês.<br />Seja o primeiro!</p>
+                                </div>
+                            )
                         ) : (
                             restOfList.map((player) => (
                                 <div
