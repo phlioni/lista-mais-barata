@@ -1,4 +1,4 @@
-import { ShoppingCart, MapPin, Menu, LogOut, Trophy, Settings } from "lucide-react";
+import { ShoppingCart, MapPin, Menu, LogOut, Trophy, Settings, Users } from "lucide-react";
 import { Link, useLocation } from "react-router-dom";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
@@ -16,6 +16,7 @@ export function AppMenu({ triggerClassName }: AppMenuProps) {
     const menuItems = [
         { path: "/", icon: Trophy, label: "Desafio Mensal" },
         { path: "/listas", icon: ShoppingCart, label: "Minhas Listas" },
+        { path: "/comunidade", icon: Users, label: "Comunidade" },
         { path: "/mercados", icon: MapPin, label: "Mercados" },
         { path: "/configuracoes", icon: Settings, label: "Configurações" }, // Novo item adicionado
     ];

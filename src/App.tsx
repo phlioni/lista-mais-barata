@@ -14,7 +14,9 @@ import Profile from "./pages/Profile";
 import PriceManager from "./pages/PriceManager";
 import CreateMarket from "./pages/CreateMarket";
 import Gamification from "./pages/Gamification";
-import Settings from "./pages/Settings"; // Importar Settings
+import Settings from "./pages/Settings";
+import Community from "./pages/Community";
+import PublicMarketDetail from "./pages/PublicMarketDetail"; // Nova Tela Pública
 
 const queryClient = new QueryClient();
 
@@ -26,27 +28,22 @@ const App = () => (
       <BrowserRouter>
         <AuthProvider>
           <Routes>
-            {/* A Home agora é a Gamificação */}
             <Route path="/" element={<Gamification />} />
-
-            {/* A antiga Home (Listas) agora fica em /listas */}
             <Route path="/listas" element={<Index />} />
-
             <Route path="/auth" element={<Auth />} />
-
-            {/* Rotas de Detalhes */}
             <Route path="/lista/:id" element={<ListDetail />} />
             <Route path="/mercado/:marketId/:listId" element={<ListDetail />} />
-
             <Route path="/comparar/:id" element={<Compare />} />
             <Route path="/mercados" element={<Markets />} />
             <Route path="/mercados/novo" element={<CreateMarket />} />
             <Route path="/perfil" element={<Profile />} />
-
-            {/* Nova rota de Configurações */}
             <Route path="/configuracoes" element={<Settings />} />
-
             <Route path="/precos" element={<PriceManager />} />
+
+            {/* Novas Rotas de Comunidade */}
+            <Route path="/comunidade" element={<Community />} />
+            <Route path="/ver-mercado/:id" element={<PublicMarketDetail />} /> {/* Rota Pública */}
+
             <Route path="*" element={<NotFound />} />
           </Routes>
         </AuthProvider>

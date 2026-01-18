@@ -1,10 +1,11 @@
 import { Link, useLocation } from "react-router-dom";
-import { ShoppingCart, MapPin, User, Trophy } from "lucide-react";
+import { ShoppingCart, MapPin, User, Trophy, Users } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const navItems = [
   { path: "/", icon: Trophy, label: "Início" }, // Gamificação (Home)
-  { path: "/listas", icon: ShoppingCart, label: "Listas" }, // Nova rota de listas
+  { path: "/listas", icon: ShoppingCart, label: "Listas" }, 
+  { path: "/comunidade", icon: Users, label: "Comunidade" },
   { path: "/mercados", icon: MapPin, label: "Mercados" },
   { path: "/perfil", icon: User, label: "Perfil" },
 ];
