@@ -1818,14 +1818,14 @@ export default function ListDetail() {
                   <X className="w-5 h-5" />
                 </Button>
 
-                <Button
+                {/* <Button
                   onClick={() => setIsQRScanning(true)}
                   variant="secondary"
                   className="w-14 shrink-0 h-14 rounded-xl border border-primary/20"
                   title="Escanear QR Code NFC-e"
                 >
                   <QrCode className="w-5 h-5 text-primary" />
-                </Button>
+                </Button> */}
 
                 <Button
                   onClick={() => setFinishDialogOpen(true)}
