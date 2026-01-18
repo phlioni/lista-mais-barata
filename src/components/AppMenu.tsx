@@ -1,24 +1,33 @@
-import { Home, ShoppingCart, MapPin, User, Menu, LogOut } from "lucide-react";
+import { ShoppingCart, MapPin, Menu, LogOut, Trophy, Settings } from "lucide-react";
 import { Link, useLocation } from "react-router-dom";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/hooks/useAuth";
 
-export function AppMenu() {
+interface AppMenuProps {
+    triggerClassName?: string;
+}
+
+export function AppMenu({ triggerClassName }: AppMenuProps) {
     const location = useLocation();
     const { signOut } = useAuth();
 
     const menuItems = [
-        { path: "/", icon: ShoppingCart, label: "Minhas Listas" },
+        { path: "/", icon: Trophy, label: "Desafio Mensal" },
+        { path: "/listas", icon: ShoppingCart, label: "Minhas Listas" },
         { path: "/mercados", icon: MapPin, label: "Mercados" },
-
+        { path: "/configuracoes", icon: Settings, label: "Configurações" }, // Novo item adicionado
     ];
 
     return (
         <Sheet>
             <SheetTrigger asChild>
-                <Button variant="ghost" size="icon" className="h-10 w-10 -mr-2">
+                <Button
+                    variant="ghost"
+                    size="icon"
+                    className={cn("h-10 w-10 -mr-2", triggerClassName)}
+                >
                     <Menu className="w-6 h-6" />
                 </Button>
             </SheetTrigger>
