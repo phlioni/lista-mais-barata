@@ -1,20 +1,8 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
-    Trophy,
-    Crown,
-    Sparkles,
-    Plus,
-    ArrowRight,
-    Target,
-    Flame,
-    Medal,
-    Loader2,
-    Settings,
-    Info,
-    CalendarCheck,
-    Gift,
-    Users
+    Trophy, Crown, Sparkles, Plus, ArrowRight, Target, Flame, Medal,
+    Loader2, Settings, Info, CalendarCheck, Gift, Users
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -24,11 +12,7 @@ import { AppMenu } from "@/components/AppMenu";
 import { cn } from "@/lib/utils";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
-    Dialog,
-    DialogContent,
-    DialogHeader,
-    DialogTitle,
-    DialogFooter,
+    Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
 
 interface LeaderboardItem {
@@ -49,45 +33,33 @@ export default function Gamification() {
     const [myRank, setMyRank] = useState<number | string>("-");
     const [myProfile, setMyProfile] = useState<{ name: string, avatar: string | null } | null>(null);
     const [isRulesOpen, setIsRulesOpen] = useState(false);
-
-    // Timestamp único gerado ao montar o componente para "burlar" o cache do Safari sem recarregar a cada render
-    const [timestamp] = useState(Date.now());
+    const [timestamp] = useState(Date.now()); // Timestamp fixo para esta sessão
 
     const TARGET_POINTS = 200;
 
-    // Função para tratar URLs de imagem para o Safari
     const getSecureUrl = (url?: string) => {
         if (!url) return undefined;
-        // Se a URL já tiver parâmetros, usa &, senão usa ?
         const separator = url.includes('?') ? '&' : '?';
         return `${url}${separator}t=${timestamp}`;
     };
 
     useEffect(() => {
-        if (!authLoading && !user) {
-            navigate("/auth");
-        }
+        if (!authLoading && !user) navigate("/auth");
     }, [user, authLoading, navigate]);
 
     useEffect(() => {
-        if (user) {
-            loadData();
-        }
+        if (user) loadData();
     }, [user]);
 
     const loadData = async () => {
         setLoading(true);
         try {
-            const { data: rankingData, error: rankError } = await supabase.rpc('get_monthly_leaderboard');
-            if (rankError) throw rankError;
-
+            const { data: rankingData } = await supabase.rpc('get_monthly_leaderboard');
             const ranking = rankingData || [];
             setLeaderboard(ranking);
 
-            const { data: pointsData, error: pointsError } = await supabase.rpc('get_my_monthly_points');
-            if (!pointsError) {
-                setMyPoints(pointsData || 0);
-            }
+            const { data: pointsData } = await supabase.rpc('get_my_monthly_points');
+            setMyPoints(pointsData || 0);
 
             const { data: profileData } = await supabase
                 .from('profiles')
@@ -103,25 +75,16 @@ export default function Gamification() {
             }
 
             const meInLeaderboard = ranking.find((item: LeaderboardItem) => item.user_id === user!.id);
-            if (meInLeaderboard) {
-                setMyRank(meInLeaderboard.rank);
-            }
+            if (meInLeaderboard) setMyRank(meInLeaderboard.rank);
 
         } catch (error) {
-            console.error("Erro ao carregar gamificação:", error);
+            console.error("Erro ao carregar:", error);
         } finally {
             setLoading(false);
         }
     };
 
-    if (authLoading) {
-        return (
-            <div className="min-h-screen bg-background flex items-center justify-center">
-                <Loader2 className="w-10 h-10 animate-spin text-primary" />
-            </div>
-        );
-    }
-
+    if (authLoading) return <div className="min-h-screen bg-background flex items-center justify-center"><Loader2 className="w-8 h-8 animate-spin text-primary" /></div>;
     if (!user) return null;
 
     const topThree = leaderboard.slice(0, 3);
@@ -153,31 +116,24 @@ export default function Gamification() {
                 <div className="px-6 mb-12">
                     <div className="bg-white/10 backdrop-blur-xl border border-white/20 rounded-3xl p-6 text-white shadow-xl relative overflow-hidden group">
                         <div className="absolute inset-0 bg-gradient-to-r from-white/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
+
                         <div className="flex items-center justify-between mb-4">
                             <div className="flex items-center gap-4">
                                 <div className="relative">
                                     <div className="w-16 h-16 rounded-full bg-gradient-to-tr from-yellow-300 to-orange-500 p-[3px] shadow-lg">
-                                        {/* HACK SAFARI: crossOrigin="anonymous" é crucial para imagens externas */}
                                         <Avatar className="w-full h-full border-2 border-white/20" style={{ transform: "translateZ(0)" }}>
                                             <AvatarImage
                                                 src={getSecureUrl(myProfile?.avatar || undefined)}
                                                 className="object-cover w-full h-full rounded-full"
                                                 crossOrigin="anonymous"
-                                                referrerPolicy="no-referrer"
                                             />
                                             <AvatarFallback className="bg-indigo-800 text-white font-bold rounded-full">EU</AvatarFallback>
                                         </Avatar>
                                     </div>
-                                    <div className="absolute -bottom-2 -right-1 bg-indigo-900 text-white text-xs font-bold px-2 py-0.5 rounded-full border border-white/20 shadow-sm">
-                                        #{myRank}
-                                    </div>
+                                    <div className="absolute -bottom-2 -right-1 bg-indigo-900 text-white text-xs font-bold px-2 py-0.5 rounded-full border border-white/20 shadow-sm">#{myRank}</div>
                                 </div>
                                 <div>
-                                    {loading ? (
-                                        <Loader2 className="w-6 h-6 animate-spin mb-2" />
-                                    ) : (
-                                        <p className="text-3xl font-bold tracking-tight animate-fade-in">{myPoints}</p>
-                                    )}
+                                    {loading ? <Loader2 className="w-6 h-6 animate-spin mb-2" /> : <p className="text-3xl font-bold tracking-tight animate-fade-in">{myPoints}</p>}
                                     <p className="text-indigo-200 text-sm font-medium">{myProfile?.name || "Meus ListCoins"}</p>
                                 </div>
                             </div>
@@ -206,12 +162,8 @@ export default function Gamification() {
                     <div className="flex items-end justify-center gap-3 h-48">
                         <div className="flex flex-col items-center gap-2 w-1/3">
                             <div className="relative">
-                                <Avatar className="w-14 h-14 border-4 border-slate-300 shadow-lg bg-slate-100">
-                                    <AvatarImage
-                                        src={getSecureUrl(topThree[1]?.avatar_url)}
-                                        className="object-cover w-full h-full rounded-full"
-                                        crossOrigin="anonymous"
-                                    />
+                                <Avatar className="w-14 h-14 border-4 border-slate-300 shadow-lg bg-slate-100" style={{ transform: "translateZ(0)" }}>
+                                    <AvatarImage src={getSecureUrl(topThree[1]?.avatar_url)} className="object-cover w-full h-full rounded-full" crossOrigin="anonymous" />
                                     <AvatarFallback className="bg-slate-200 text-slate-400 font-bold rounded-full">2</AvatarFallback>
                                 </Avatar>
                                 {topThree[1] && <div className="absolute -bottom-2 inset-x-0 flex justify-center"><span className="bg-slate-300 text-slate-800 text-[10px] font-bold px-2 py-0.5 rounded-full shadow-sm">2º</span></div>}
@@ -226,17 +178,13 @@ export default function Gamification() {
                         <div className="flex flex-col items-center gap-2 w-1/3 relative -top-2">
                             <Crown className="w-8 h-8 text-yellow-300 fill-yellow-300 animate-bounce absolute -top-10 pointer-events-none" />
                             <div className="relative">
-                                <Avatar className="w-20 h-20 border-4 border-yellow-400 shadow-xl ring-4 ring-yellow-400/20 bg-yellow-50">
-                                    <AvatarImage
-                                        src={getSecureUrl(topThree[0]?.avatar_url)}
-                                        className="object-cover w-full h-full rounded-full"
-                                        crossOrigin="anonymous"
-                                    />
+                                <Avatar className="w-20 h-20 border-4 border-yellow-400 shadow-xl ring-4 ring-yellow-400/20 bg-yellow-50" style={{ transform: "translateZ(0)" }}>
+                                    <AvatarImage src={getSecureUrl(topThree[0]?.avatar_url)} className="object-cover w-full h-full rounded-full" crossOrigin="anonymous" />
                                     <AvatarFallback className="bg-yellow-100 text-yellow-600 font-bold rounded-full">1</AvatarFallback>
                                 </Avatar>
                                 {topThree[0] && <div className="absolute -bottom-3 inset-x-0 flex justify-center"><span className="bg-yellow-400 text-yellow-900 text-xs font-bold px-3 py-0.5 rounded-full shadow-md">1º</span></div>}
                             </div>
-                            <div className="h-32 w-full bg-gradient-to-b from-yellow-400/30 to-yellow-600/10 backdrop-blur-md rounded-t-2xl border-t border-x border-yellow-400/30 flex flex-col items-center justify-end p-3 relative overflow-hidden shadow-[0_0_30px_rgba(250,204,21,0.2)]">
+                            <div className="h-32 w-full bg-gradient-to-b from-yellow-400/30 to-yellow-600/10 backdrop-blur-md rounded-t-2xl border-t border-x border-yellow-400/30 flex flex-col items-center justify-end p-3 relative overflow-hidden">
                                 <div className="absolute inset-0 bg-gradient-to-t from-yellow-900/40 to-transparent" />
                                 <p className="text-white font-bold relative z-10 text-base truncate w-full text-center">{topThree[0]?.display_name || "Vago"}</p>
                                 <p className="text-yellow-100 text-sm relative z-10 font-medium">{topThree[0]?.total_points || 0} pts</p>
@@ -245,12 +193,8 @@ export default function Gamification() {
 
                         <div className="flex flex-col items-center gap-2 w-1/3">
                             <div className="relative">
-                                <Avatar className="w-14 h-14 border-4 border-orange-400 shadow-lg bg-orange-50">
-                                    <AvatarImage
-                                        src={getSecureUrl(topThree[2]?.avatar_url)}
-                                        className="object-cover w-full h-full rounded-full"
-                                        crossOrigin="anonymous"
-                                    />
+                                <Avatar className="w-14 h-14 border-4 border-orange-400 shadow-lg bg-orange-50" style={{ transform: "translateZ(0)" }}>
+                                    <AvatarImage src={getSecureUrl(topThree[2]?.avatar_url)} className="object-cover w-full h-full rounded-full" crossOrigin="anonymous" />
                                     <AvatarFallback className="bg-orange-100 text-orange-600 font-bold rounded-full">3</AvatarFallback>
                                 </Avatar>
                                 {topThree[2] && <div className="absolute -bottom-2 inset-x-0 flex justify-center"><span className="bg-orange-400 text-orange-900 text-[10px] font-bold px-2 py-0.5 rounded-full shadow-sm">3º</span></div>}
@@ -275,12 +219,8 @@ export default function Gamification() {
                                 <div key={player.user_id} className={cn("flex items-center justify-between p-3 rounded-2xl border transition-all duration-200", player.user_id === user?.id ? "bg-indigo-50 border-indigo-200 shadow-sm" : "bg-background border-border")}>
                                     <div className="flex items-center gap-3">
                                         <span className="text-muted-foreground font-bold w-6 text-center text-sm">#{player.rank}</span>
-                                        <Avatar className="w-10 h-10 border border-border">
-                                            <AvatarImage
-                                                src={getSecureUrl(player.avatar_url)}
-                                                className="rounded-full object-cover"
-                                                crossOrigin="anonymous"
-                                            />
+                                        <Avatar className="w-10 h-10 border border-border" style={{ transform: "translateZ(0)" }}>
+                                            <AvatarImage src={getSecureUrl(player.avatar_url)} className="rounded-full object-cover" crossOrigin="anonymous" />
                                             <AvatarFallback className="rounded-full">{player.rank}</AvatarFallback>
                                         </Avatar>
                                         <div className="flex flex-col">
