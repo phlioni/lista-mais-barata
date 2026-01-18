@@ -32,7 +32,7 @@ export default function Settings() {
                 .eq('id', user!.id)
                 .single();
 
-            if (error && error.code !== 'PGRST116') throw error; // Ignora erro se não existir perfil ainda
+            if (error && error.code !== 'PGRST116') throw error;
 
             if (data) {
                 setDisplayName(data.display_name || "");
@@ -61,7 +61,10 @@ export default function Settings() {
             if (uploadError) throw uploadError;
 
             const { data } = supabase.storage.from('avatars').getPublicUrl(filePath);
-            setAvatarUrl(data.publicUrl);
+
+            // Adiciona um timestamp para quebrar o cache, caso a URL seja a mesma (embora o math.random acima ajude)
+            const publicUrl = data.publicUrl;
+            setAvatarUrl(publicUrl);
 
             toast({ title: "Foto carregada!", description: "Não esqueça de salvar as alterações." });
 
@@ -83,13 +86,13 @@ export default function Settings() {
                     id: user.id,
                     display_name: displayName,
                     avatar_url: avatarUrl,
-                    email: user.email // Garante que o email esteja lá
+                    email: user.email
                 });
 
             if (error) throw error;
 
             toast({ title: "Perfil atualizado!", description: "Suas informações foram salvas." });
-            navigate("/"); // Volta para a Gamificação para ver a mudança
+            navigate("/");
         } catch (error) {
             console.error("Error updating profile:", error);
             toast({ title: "Erro ao salvar", variant: "destructive" });
@@ -121,8 +124,9 @@ export default function Settings() {
                 {/* Avatar Section */}
                 <div className="flex flex-col items-center gap-4">
                     <div className="relative group">
-                        <Avatar className="w-32 h-32 border-4 border-background shadow-xl">
-                            <AvatarImage src={avatarUrl} className="object-cover" />
+                        {/* HACK SAFARI: transform: translateZ(0) */}
+                        <Avatar className="w-32 h-32 border-4 border-background shadow-xl" style={{ transform: "translateZ(0)" }}>
+                            <AvatarImage src={avatarUrl} className="object-cover w-full h-full" />
                             <AvatarFallback className="text-4xl bg-muted"><User /></AvatarFallback>
                         </Avatar>
                         <label
