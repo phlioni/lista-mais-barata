@@ -42,17 +42,24 @@ interface LeaderboardItem {
 
 export default function Gamification() {
     const navigate = useNavigate();
-    const { user } = useAuth();
+    // 1. Extraímos o loading da autenticação (authLoading)
+    const { user, loading: authLoading } = useAuth();
+
     const [loading, setLoading] = useState(true);
     const [leaderboard, setLeaderboard] = useState<LeaderboardItem[]>([]);
-
     const [myPoints, setMyPoints] = useState(0);
     const [myRank, setMyRank] = useState<number | string>("-");
     const [myProfile, setMyProfile] = useState<{ name: string, avatar: string | null } | null>(null);
-
     const [isRulesOpen, setIsRulesOpen] = useState(false);
 
     const TARGET_POINTS = 200;
+
+    // 2. SEGURANÇA: Se terminou de carregar a auth e não tem usuário, chuta para o login
+    useEffect(() => {
+        if (!authLoading && !user) {
+            navigate("/auth");
+        }
+    }, [user, authLoading, navigate]);
 
     useEffect(() => {
         if (user) {
@@ -99,6 +106,18 @@ export default function Gamification() {
         }
     };
 
+    // 3. SEGURANÇA VISUAL: Enquanto verifica a autenticação, mostra Loading tela cheia
+    if (authLoading) {
+        return (
+            <div className="min-h-screen bg-background flex items-center justify-center">
+                <Loader2 className="w-10 h-10 animate-spin text-primary" />
+            </div>
+        );
+    }
+
+    // Se passou do loading e não tem user (o useEffect vai redirecionar, mas retornamos null pra não piscar a tela)
+    if (!user) return null;
+
     const topThree = leaderboard.slice(0, 3);
     const restOfList = leaderboard.slice(3);
     const progress = Math.min((myPoints / TARGET_POINTS) * 100, 100);
@@ -135,7 +154,6 @@ export default function Gamification() {
                 </header>
 
                 {/* Card de Status do Usuário (Hero) */}
-                {/* Aumentei a margem inferior para mb-12 para afastar o podio e a coroa não atrapalhar */}
                 <div className="px-6 mb-12">
                     <div className="bg-white/10 backdrop-blur-xl border border-white/20 rounded-3xl p-6 text-white shadow-xl relative overflow-hidden group">
                         <div className="absolute inset-0 bg-gradient-to-r from-white/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
@@ -144,7 +162,7 @@ export default function Gamification() {
                             <div className="flex items-center gap-4">
                                 <div className="relative">
                                     <div className="w-16 h-16 rounded-full bg-gradient-to-tr from-yellow-300 to-orange-500 p-[3px] shadow-lg">
-                                        {/* HACK SAFARI: transform: translateZ(0) */}
+                                        {/* HACK SAFARI */}
                                         <Avatar className="w-full h-full border-2 border-white/20" style={{ transform: "translateZ(0)" }}>
                                             <AvatarImage src={myProfile?.avatar || undefined} className="object-cover w-full h-full" />
                                             <AvatarFallback className="bg-indigo-800 text-white font-bold">EU</AvatarFallback>
@@ -229,7 +247,6 @@ export default function Gamification() {
 
                         {/* 1º Lugar */}
                         <div className="flex flex-col items-center gap-2 w-1/3 relative -top-2">
-                            {/* CORREÇÃO: pointer-events-none para não bloquear cliques atrás */}
                             <Crown className="w-8 h-8 text-yellow-300 fill-yellow-300 animate-bounce absolute -top-10 pointer-events-none" />
                             <div className="relative">
                                 <Avatar className="w-20 h-20 border-4 border-yellow-400 shadow-xl ring-4 ring-yellow-400/20 bg-yellow-50" style={{ transform: "translateZ(0)" }}>
