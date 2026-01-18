@@ -18,6 +18,7 @@ export default function Settings() {
     const [saving, setSaving] = useState(false);
     const [displayName, setDisplayName] = useState("");
     const [avatarUrl, setAvatarUrl] = useState("");
+    const [avatarKey, setAvatarKey] = useState(Date.now()); // Estado para forçar re-render da imagem
     const [uploading, setUploading] = useState(false);
 
     useEffect(() => {
@@ -36,7 +37,10 @@ export default function Settings() {
 
             if (data) {
                 setDisplayName(data.display_name || "");
-                setAvatarUrl(data.avatar_url || "");
+                // Adiciona timestamp para evitar cache antigo
+                if (data.avatar_url) {
+                    setAvatarUrl(`${data.avatar_url}?t=${Date.now()}`);
+                }
             }
         } catch (error) {
             console.error("Error loading profile:", error);
@@ -51,26 +55,33 @@ export default function Settings() {
             const file = event.target.files?.[0];
             if (!file) return;
 
+            // Pegamos a extensão (ex: png, jpg, heic)
             const fileExt = file.name.split('.').pop();
-            const filePath = `${user!.id}/${Math.random()}.${fileExt}`;
+            // Nome fixo para não encher o bucket. Sempre será "avatar.ext"
+            const fileName = `avatar.${fileExt}`;
+            const filePath = `${user!.id}/${fileName}`;
 
+            // 1. Upload com UPSERT (Sobrescreve o anterior)
             const { error: uploadError } = await supabase.storage
                 .from('avatars')
-                .upload(filePath, file);
+                .upload(filePath, file, { upsert: true });
 
             if (uploadError) throw uploadError;
 
+            // 2. Pega a URL Pública
             const { data } = supabase.storage.from('avatars').getPublicUrl(filePath);
 
-            // Adiciona um timestamp para quebrar o cache, caso a URL seja a mesma (embora o math.random acima ajude)
-            const publicUrl = data.publicUrl;
-            setAvatarUrl(publicUrl);
+            // 3. Tática Anti-Cache: Adiciona timestamp na URL
+            const publicUrlWithTimestamp = `${data.publicUrl}?t=${Date.now()}`;
 
-            toast({ title: "Foto carregada!", description: "Não esqueça de salvar as alterações." });
+            setAvatarUrl(publicUrlWithTimestamp);
+            setAvatarKey(Date.now()); // Força o componente Avatar a piscar e atualizar
+
+            toast({ title: "Foto carregada!", description: "Clique em Salvar para confirmar." });
 
         } catch (error) {
             console.error("Error uploading avatar:", error);
-            toast({ title: "Erro no upload", variant: "destructive" });
+            toast({ title: "Erro no upload", description: "Tente uma imagem JPG ou PNG.", variant: "destructive" });
         } finally {
             setUploading(false);
         }
@@ -80,12 +91,15 @@ export default function Settings() {
         if (!user) return;
         setSaving(true);
         try {
+            // Remove o timestamp da URL antes de salvar no banco para manter a URL limpa
+            const cleanUrl = avatarUrl.split('?')[0];
+
             const { error } = await supabase
                 .from('profiles')
                 .upsert({
                     id: user.id,
                     display_name: displayName,
-                    avatar_url: avatarUrl,
+                    avatar_url: cleanUrl,
                     email: user.email
                 });
 
@@ -124,9 +138,14 @@ export default function Settings() {
                 {/* Avatar Section */}
                 <div className="flex flex-col items-center gap-4">
                     <div className="relative group">
-                        {/* HACK SAFARI: transform: translateZ(0) */}
-                        <Avatar className="w-32 h-32 border-4 border-background shadow-xl" style={{ transform: "translateZ(0)" }}>
-                            <AvatarImage src={avatarUrl} className="object-cover w-full h-full" />
+                        {/* key={avatarKey} força o React a destruir e recriar a imagem quando muda */}
+                        <Avatar key={avatarKey} className="w-32 h-32 border-4 border-background shadow-xl" style={{ transform: "translateZ(0)" }}>
+                            <AvatarImage
+                                src={avatarUrl}
+                                className="object-cover w-full h-full"
+                                // Adiciona crossOrigin para evitar problemas de CORS com imagens cacheadas
+                                crossOrigin="anonymous"
+                            />
                             <AvatarFallback className="text-4xl bg-muted"><User /></AvatarFallback>
                         </Avatar>
                         <label
