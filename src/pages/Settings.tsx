@@ -18,7 +18,7 @@ export default function Settings() {
     const [saving, setSaving] = useState(false);
     const [displayName, setDisplayName] = useState("");
     const [avatarUrl, setAvatarUrl] = useState("");
-    const [avatarKey, setAvatarKey] = useState(Date.now()); // Estado para forçar re-render da imagem
+    const [avatarKey, setAvatarKey] = useState(Date.now());
     const [uploading, setUploading] = useState(false);
 
     useEffect(() => {
@@ -37,8 +37,8 @@ export default function Settings() {
 
             if (data) {
                 setDisplayName(data.display_name || "");
-                // Adiciona timestamp para evitar cache antigo
                 if (data.avatar_url) {
+                    // Adiciona timestamp para forçar o navegador a baixar a imagem mais recente
                     setAvatarUrl(`${data.avatar_url}?t=${Date.now()}`);
                 }
             }
@@ -49,39 +49,53 @@ export default function Settings() {
         }
     };
 
+    // Função para limpar imagens antigas (Evita encher o banco)
+    const clearUserAvatarFolder = async (userId: string) => {
+        try {
+            const { data: files } = await supabase.storage.from('avatars').list(userId);
+            if (files && files.length > 0) {
+                const filesToRemove = files.map(f => `${userId}/${f.name}`);
+                await supabase.storage.from('avatars').remove(filesToRemove);
+            }
+        } catch (error) {
+            console.error("Erro ao limpar pasta:", error);
+        }
+    };
+
     const handleAvatarUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
         try {
             setUploading(true);
             const file = event.target.files?.[0];
             if (!file) return;
 
-            // Pegamos a extensão (ex: png, jpg, heic)
+            // 1. Limpa qualquer imagem anterior para não encher o storage
+            await clearUserAvatarFolder(user!.id);
+
+            // 2. Prepara o novo upload
             const fileExt = file.name.split('.').pop();
-            // Nome fixo para não encher o bucket. Sempre será "avatar.ext"
-            const fileName = `avatar.${fileExt}`;
+            const fileName = `avatar-${Date.now()}.${fileExt}`; // Nome único
             const filePath = `${user!.id}/${fileName}`;
 
-            // 1. Upload com UPSERT (Sobrescreve o anterior)
             const { error: uploadError } = await supabase.storage
                 .from('avatars')
                 .upload(filePath, file, { upsert: true });
 
             if (uploadError) throw uploadError;
 
-            // 2. Pega a URL Pública
+            // 3. Gera a URL Pública
             const { data } = supabase.storage.from('avatars').getPublicUrl(filePath);
 
-            // 3. Tática Anti-Cache: Adiciona timestamp na URL
-            const publicUrlWithTimestamp = `${data.publicUrl}?t=${Date.now()}`;
+            const publicUrl = data.publicUrl;
+            const displayUrl = `${publicUrl}?t=${Date.now()}`; // URL com cache buster para visualização imediata
 
-            setAvatarUrl(publicUrlWithTimestamp);
-            setAvatarKey(Date.now()); // Força o componente Avatar a piscar e atualizar
+            setAvatarUrl(displayUrl);
+            setAvatarKey(Date.now()); // Força o componente visual a atualizar
 
             toast({ title: "Foto carregada!", description: "Clique em Salvar para confirmar." });
 
         } catch (error) {
             console.error("Error uploading avatar:", error);
-            toast({ title: "Erro no upload", description: "Tente uma imagem JPG ou PNG.", variant: "destructive" });
+            toast({ title: "Erro no upload", description: "Tente uma imagem JPG ou PNG menor.", variant: "destructive" });
         } finally {
             setUploading(false);
         }
@@ -91,7 +105,7 @@ export default function Settings() {
         if (!user) return;
         setSaving(true);
         try {
-            // Remove o timestamp da URL antes de salvar no banco para manter a URL limpa
+            // Salva no banco a URL "limpa" (sem o ?t=...)
             const cleanUrl = avatarUrl.split('?')[0];
 
             const { error } = await supabase
@@ -125,7 +139,6 @@ export default function Settings() {
 
     return (
         <div className="min-h-screen bg-background">
-            {/* Header */}
             <div className="flex items-center gap-3 px-4 py-4 border-b border-border bg-background/80 backdrop-blur-md sticky top-0 z-10">
                 <Button variant="ghost" size="icon" onClick={() => navigate(-1)}>
                     <ArrowLeft className="w-5 h-5 text-muted-foreground" />
@@ -134,16 +147,13 @@ export default function Settings() {
             </div>
 
             <main className="p-6 max-w-md mx-auto space-y-8">
-
-                {/* Avatar Section */}
                 <div className="flex flex-col items-center gap-4">
                     <div className="relative group">
-                        {/* key={avatarKey} força o React a destruir e recriar a imagem quando muda */}
-                        <Avatar key={avatarKey} className="w-32 h-32 border-4 border-background shadow-xl" style={{ transform: "translateZ(0)" }}>
+                        {/* key força re-render. crossOrigin ajuda no mobile */}
+                        <Avatar key={avatarKey} className="w-32 h-32 border-4 border-background shadow-xl">
                             <AvatarImage
                                 src={avatarUrl}
                                 className="object-cover w-full h-full"
-                                // Adiciona crossOrigin para evitar problemas de CORS com imagens cacheadas
                                 crossOrigin="anonymous"
                             />
                             <AvatarFallback className="text-4xl bg-muted"><User /></AvatarFallback>
@@ -166,7 +176,6 @@ export default function Settings() {
                     <p className="text-sm text-muted-foreground">Toque no ícone para alterar a foto</p>
                 </div>
 
-                {/* Form */}
                 <div className="space-y-4">
                     <div className="space-y-2">
                         <Label htmlFor="name">Nome de Exibição</Label>
@@ -200,7 +209,6 @@ export default function Settings() {
                         </Button>
                     </div>
                 </div>
-
             </main>
         </div>
     );
