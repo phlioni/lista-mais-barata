@@ -8,13 +8,15 @@ import {
     ArrowRight,
     Target,
     Flame,
-    Medal,
     Loader2,
     Settings,
     Info,
     CalendarCheck,
     Gift,
-    Users
+    Users,
+    MessageCircle,
+    ChevronRight,
+    Quote
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -28,9 +30,10 @@ import {
     DialogContent,
     DialogHeader,
     DialogTitle,
-    DialogDescription,
     DialogFooter,
 } from "@/components/ui/dialog";
+import { formatDistanceToNow } from "date-fns";
+import { ptBR } from "date-fns/locale";
 
 interface LeaderboardItem {
     user_id: string;
@@ -40,9 +43,18 @@ interface LeaderboardItem {
     rank: number;
 }
 
+interface LatestPost {
+    id: string;
+    content: string;
+    created_at: string;
+    profiles: {
+        display_name: string | null;
+        avatar_url: string | null;
+    } | null;
+}
+
 export default function Gamification() {
     const navigate = useNavigate();
-    // 1. Extraímos o loading da autenticação (authLoading)
     const { user, loading: authLoading } = useAuth();
 
     const [loading, setLoading] = useState(true);
@@ -51,71 +63,91 @@ export default function Gamification() {
     const [myRank, setMyRank] = useState<number | string>("-");
     const [myProfile, setMyProfile] = useState<{ name: string, avatar: string | null } | null>(null);
     const [isRulesOpen, setIsRulesOpen] = useState(false);
+    const [latestPost, setLatestPost] = useState<LatestPost | null>(null);
+
+    // Timestamp fixo para evitar "piscar" das imagens no Safari
+    const [sessionTimestamp] = useState(Date.now());
 
     const TARGET_POINTS = 200;
 
-    // 2. SEGURANÇA: Se terminou de carregar a auth e não tem usuário, chuta para o login
+    const getSecureUrl = (url: string | null | undefined) => {
+        if (!url) return undefined;
+        const separator = url.includes('?') ? '&' : '?';
+        return `${url}${separator}t=${sessionTimestamp}`;
+    };
+
     useEffect(() => {
-        if (!authLoading && !user) {
-            navigate("/auth");
-        }
+        if (!authLoading && !user) navigate("/auth");
     }, [user, authLoading, navigate]);
 
     useEffect(() => {
-        if (user) {
-            loadData();
-        }
+        if (user) loadData();
     }, [user]);
 
     const loadData = async () => {
         setLoading(true);
         try {
-            const { data: rankingData, error: rankError } = await supabase.rpc('get_monthly_leaderboard');
-            if (rankError) throw rankError;
+            // 1. Ranking com Ordenação Explícita no Front (CORREÇÃO AQUI)
+            const { data: rankingData } = await supabase.rpc('get_monthly_leaderboard');
 
-            const ranking = rankingData || [];
-            setLeaderboard(ranking);
+            // Garante a ordem correta (maior pontuação primeiro)
+            const sortedRanking = (rankingData || []).sort((a: LeaderboardItem, b: LeaderboardItem) => b.total_points - a.total_points);
 
-            const { data: pointsData, error: pointsError } = await supabase.rpc('get_my_monthly_points');
-            if (!pointsError) {
-                setMyPoints(pointsData || 0);
+            // Recalcula o rank visual baseado na posição do array ordenado
+            const rankingWithCorrectRank = sortedRanking.map((item: LeaderboardItem, index: number) => ({
+                ...item,
+                rank: index + 1
+            }));
+
+            setLeaderboard(rankingWithCorrectRank);
+
+            // 2. Pontos
+            const { data: pointsData } = await supabase.rpc('get_my_monthly_points');
+            setMyPoints(pointsData || 0);
+
+            // 3. Perfil
+            const { data: profileData } = await supabase.from('profiles').select('display_name, avatar_url').eq('id', user!.id).single();
+            if (profileData) {
+                setMyProfile({ name: profileData.display_name || "Você", avatar: profileData.avatar_url });
             }
 
-            const { data: profileData } = await supabase
-                .from('profiles')
-                .select('display_name, avatar_url')
-                .eq('id', user!.id)
-                .single();
+            // 4. Rank (CORREÇÃO AQUI: Usa o array ordenado para achar a posição)
+            const meInLeaderboard = rankingWithCorrectRank.find((item: LeaderboardItem) => item.user_id === user!.id);
+            if (meInLeaderboard) {
+                setMyRank(meInLeaderboard.rank);
+                // Opcional: Atualizar pontos com o dado do ranking para garantir consistência
+                setMyPoints(meInLeaderboard.total_points);
+            }
 
-            if (profileData) {
-                setMyProfile({
-                    name: profileData.display_name || "Você",
-                    avatar: profileData.avatar_url
+            // 5. Último Post (Widget da Comunidade)
+            const { data: postData } = await supabase
+                .from('posts')
+                .select(`
+          id, content, created_at, 
+          profiles (display_name, avatar_url)
+        `)
+                .order('created_at', { ascending: false })
+                .limit(1)
+                .maybeSingle();
+
+            if (postData) {
+                setLatestPost({
+                    id: postData.id,
+                    content: postData.content,
+                    created_at: postData.created_at,
+                    // @ts-ignore
+                    profiles: Array.isArray(postData.profiles) ? postData.profiles[0] : postData.profiles
                 });
             }
 
-            const meInLeaderboard = ranking.find((item: LeaderboardItem) => item.user_id === user!.id);
-            if (meInLeaderboard) {
-                setMyRank(meInLeaderboard.rank);
-            }
-
         } catch (error) {
-            console.error("Erro ao carregar gamificação:", error);
+            console.error("Erro ao carregar:", error);
         } finally {
             setLoading(false);
         }
     };
 
-    // 3. SEGURANÇA VISUAL: Enquanto verifica a autenticação, mostra Loading tela cheia
-    if (authLoading) {
-        return (
-            <div className="min-h-screen bg-background flex items-center justify-center">
-                <Loader2 className="w-10 h-10 animate-spin text-primary" />
-            </div>
-        );
-    }
-
-    // Se passou do loading e não tem user (o useEffect vai redirecionar, mas retornamos null pra não piscar a tela)
+    if (authLoading) return <div className="min-h-screen bg-background flex items-center justify-center"><Loader2 className="w-10 h-10 animate-spin text-primary" /></div>;
     if (!user) return null;
 
     const topThree = leaderboard.slice(0, 3);
@@ -123,308 +155,262 @@ export default function Gamification() {
     const progress = Math.min((myPoints / TARGET_POINTS) * 100, 100);
 
     return (
-        <div className="min-h-screen bg-background relative overflow-hidden flex flex-col pb-24">
-            {/* Background Decorativo */}
-            <div className="absolute top-0 left-0 w-full h-[500px] bg-gradient-to-b from-indigo-600 via-purple-600 to-background rounded-b-[4rem] shadow-2xl z-0" />
+        <div className="min-h-screen bg-gray-50/50 pb-24 font-sans">
+            {/* Background Sutil */}
+            <div className="fixed top-0 left-0 w-full h-[400px] bg-gradient-to-b from-indigo-500/10 to-transparent -z-10" />
 
-            <div className="absolute top-10 left-10 w-32 h-32 bg-pink-500/20 rounded-full blur-3xl animate-pulse" />
-            <div className="absolute top-20 right-10 w-40 h-40 bg-blue-500/20 rounded-full blur-3xl animate-pulse delay-700" />
+            {/* Header Transparente */}
+            <header className="px-5 py-4 flex items-center justify-between sticky top-0 z-20 backdrop-blur-sm bg-background/60 border-b border-border/20">
+                <div>
+                    <h1 className="text-xl font-display font-bold text-foreground flex items-center gap-2">
+                        Ranking Mensal <Flame className="w-5 h-5 text-orange-500 fill-orange-500 animate-pulse" />
+                    </h1>
+                </div>
+                <div className="flex gap-2">
+                    <Button variant="ghost" size="icon" onClick={() => navigate("/configuracoes")} className="rounded-full hover:bg-background/80">
+                        <Settings className="w-5 h-5 text-muted-foreground" />
+                    </Button>
+                    <AppMenu triggerClassName="rounded-full hover:bg-background/80" />
+                </div>
+            </header>
 
-            <div className="relative z-10 flex-1 flex flex-col">
+            <main className="px-5 py-6 space-y-6">
 
-                {/* Header */}
-                <header className="px-6 py-6 flex items-center justify-between text-white">
-                    <div className="flex flex-col">
-                        <span className="text-sm font-medium opacity-80 uppercase tracking-wider">Desafio Mensal</span>
-                        <h1 className="text-2xl font-display font-bold flex items-center gap-2">
-                            Mestre da Economia <Flame className="w-5 h-5 text-orange-400 fill-orange-400 animate-pulse" />
-                        </h1>
-                    </div>
-                    <div className="flex items-center gap-1">
-                        <Button
-                            variant="ghost"
-                            size="icon"
-                            onClick={() => navigate("/configuracoes")}
-                            className="text-white/80 hover:text-white hover:bg-white/10"
-                        >
-                            <Settings className="w-6 h-6" />
-                        </Button>
-                        <AppMenu triggerClassName="text-white/80 hover:text-white hover:bg-white/10" />
-                    </div>
-                </header>
+                {/* 1. HERO CARD: O "Cartão de Crédito" do Jogador */}
+                <div className="relative overflow-hidden rounded-[2rem] bg-gradient-to-br from-[#4F46E5] to-[#7C3AED] p-6 text-white shadow-xl shadow-indigo-500/20">
+                    {/* Círculos decorativos */}
+                    <div className="absolute top-0 right-0 -mr-8 -mt-8 w-32 h-32 rounded-full bg-white/10 blur-2xl" />
+                    <div className="absolute bottom-0 left-0 -ml-8 -mb-8 w-24 h-24 rounded-full bg-pink-500/20 blur-2xl" />
 
-                {/* Card de Status do Usuário (Hero) */}
-                <div className="px-6 mb-12">
-                    <div className="bg-white/10 backdrop-blur-xl border border-white/20 rounded-3xl p-6 text-white shadow-xl relative overflow-hidden group">
-                        <div className="absolute inset-0 bg-gradient-to-r from-white/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
-
-                        <div className="flex items-center justify-between mb-4">
-                            <div className="flex items-center gap-4">
-                                <div className="relative">
-                                    <div className="w-16 h-16 rounded-full bg-gradient-to-tr from-yellow-300 to-orange-500 p-[3px] shadow-lg">
-                                        {/* HACK SAFARI */}
-                                        <Avatar className="w-full h-full border-2 border-white/20" style={{ transform: "translateZ(0)" }}>
-                                            <AvatarImage src={myProfile?.avatar || undefined} className="object-cover w-full h-full" />
-                                            <AvatarFallback className="bg-indigo-800 text-white font-bold">EU</AvatarFallback>
-                                        </Avatar>
-                                    </div>
-                                    <div className="absolute -bottom-2 -right-1 bg-indigo-900 text-white text-xs font-bold px-2 py-0.5 rounded-full border border-white/20 shadow-sm">
-                                        #{myRank}
-                                    </div>
-                                </div>
+                    <div className="relative z-10">
+                        <div className="flex justify-between items-start mb-6">
+                            <div className="flex items-center gap-3">
+                                <Avatar className="w-14 h-14 border-[3px] border-white/30 shadow-inner">
+                                    <AvatarImage src={getSecureUrl(myProfile?.avatar)} className="object-cover" />
+                                    <AvatarFallback className="bg-indigo-800 text-white font-bold">EU</AvatarFallback>
+                                </Avatar>
                                 <div>
-                                    {loading ? (
-                                        <Loader2 className="w-6 h-6 animate-spin mb-2" />
-                                    ) : (
-                                        <p className="text-3xl font-bold tracking-tight animate-fade-in">
-                                            {myPoints}
-                                        </p>
-                                    )}
-                                    <p className="text-indigo-200 text-sm font-medium">
-                                        {myProfile?.name || "Meus ListCoins"}
-                                    </p>
+                                    <p className="text-indigo-100 text-xs font-medium uppercase tracking-wider mb-0.5">Sua Pontuação</p>
+                                    <h2 className="text-3xl font-bold tracking-tight flex items-baseline gap-1">
+                                        {myPoints} <span className="text-sm font-normal opacity-70">pts</span>
+                                    </h2>
                                 </div>
                             </div>
-                            <div className="h-12 w-12 rounded-2xl bg-white/20 flex items-center justify-center border border-white/10">
-                                <Trophy className="w-6 h-6 text-yellow-300" />
+                            <div className="bg-white/20 backdrop-blur-md px-3 py-1.5 rounded-xl border border-white/10 flex flex-col items-center">
+                                <span className="text-[10px] uppercase font-bold text-indigo-100">Rank</span>
+                                <span className="text-lg font-bold leading-none">#{myRank}</span>
                             </div>
                         </div>
 
-                        <div className="space-y-3">
-                            <div className="flex justify-between text-xs font-medium text-indigo-200">
-                                <span>Progresso para o prêmio</span>
-                                <span>{progress.toFixed(0)}%</span>
+                        {/* Barra de Progresso com Meta */}
+                        <div className="space-y-2">
+                            <div className="flex justify-between text-xs font-medium text-indigo-100/80">
+                                <span>Prêmio Mensal</span>
+                                <span>{Math.round(progress)}%</span>
                             </div>
-                            <div className="h-4 bg-black/20 rounded-full overflow-hidden p-0.5 backdrop-blur-sm">
+                            <div className="h-3 bg-black/20 rounded-full p-0.5 backdrop-blur-sm overflow-hidden">
                                 <div
-                                    className="h-full bg-gradient-to-r from-yellow-300 via-orange-400 to-pink-500 rounded-full shadow-[0_0_15px_rgba(251,146,60,0.6)] transition-all duration-1000 ease-out relative"
+                                    className="h-full bg-gradient-to-r from-yellow-300 to-orange-400 rounded-full shadow-[0_0_10px_rgba(253,186,116,0.6)] relative transition-all duration-1000"
                                     style={{ width: `${progress}%` }}
                                 >
                                     <div className="absolute inset-0 bg-white/30 w-full animate-[shimmer_2s_infinite]" />
                                 </div>
                             </div>
-
-                            <button
+                            <div
                                 onClick={() => setIsRulesOpen(true)}
-                                className="w-full mt-2 py-2 px-3 bg-white/10 hover:bg-white/20 rounded-xl flex items-center justify-center gap-2 transition-all group border border-white/5 z-20 relative"
+                                className="flex items-center gap-1.5 text-xs text-indigo-100 mt-2 cursor-pointer hover:text-white transition-colors w-fit"
                             >
-                                <Info className="w-4 h-4 text-yellow-300 group-hover:scale-110 transition-transform" />
-                                <span className="text-xs text-white/90 font-medium">
-                                    Faltam <strong>{Math.max(0, TARGET_POINTS - myPoints)}</strong> pts. Como ganhar?
-                                </span>
-                            </button>
-                        </div>
-                    </div>
-                </div>
-
-                {/* Podium Section */}
-                <div className="px-4 mb-6">
-                    <div className="flex items-end justify-center gap-3 h-48">
-
-                        {/* 2º Lugar */}
-                        <div className="flex flex-col items-center gap-2 w-1/3">
-                            <div className="relative">
-                                <Avatar className="w-14 h-14 border-4 border-slate-300 shadow-lg bg-slate-100" style={{ transform: "translateZ(0)" }}>
-                                    <AvatarImage src={topThree[1]?.avatar_url || undefined} className="object-cover w-full h-full" />
-                                    <AvatarFallback className="bg-slate-200 text-slate-400 font-bold">2</AvatarFallback>
-                                </Avatar>
-                                {topThree[1] && (
-                                    <div className="absolute -bottom-2 inset-x-0 flex justify-center">
-                                        <span className="bg-slate-300 text-slate-800 text-[10px] font-bold px-2 py-0.5 rounded-full shadow-sm">2º</span>
-                                    </div>
-                                )}
-                            </div>
-                            <div className="h-24 w-full bg-slate-300/20 backdrop-blur-sm rounded-t-2xl border-t border-x border-white/20 flex flex-col items-center justify-end p-2 relative overflow-hidden">
-                                <div className="absolute inset-0 bg-gradient-to-t from-slate-900/40 to-transparent" />
-                                <p className="text-white font-bold relative z-10 text-sm truncate w-full text-center">
-                                    {topThree[1]?.display_name || "-"}
-                                </p>
-                                <p className="text-slate-200 text-xs relative z-10">
-                                    {topThree[1]?.total_points || 0}
-                                </p>
-                            </div>
-                        </div>
-
-                        {/* 1º Lugar */}
-                        <div className="flex flex-col items-center gap-2 w-1/3 relative -top-2">
-                            <Crown className="w-8 h-8 text-yellow-300 fill-yellow-300 animate-bounce absolute -top-10 pointer-events-none" />
-                            <div className="relative">
-                                <Avatar className="w-20 h-20 border-4 border-yellow-400 shadow-xl ring-4 ring-yellow-400/20 bg-yellow-50" style={{ transform: "translateZ(0)" }}>
-                                    <AvatarImage src={topThree[0]?.avatar_url || undefined} className="object-cover w-full h-full" />
-                                    <AvatarFallback className="bg-yellow-100 text-yellow-600 font-bold">1</AvatarFallback>
-                                </Avatar>
-                                {topThree[0] && (
-                                    <div className="absolute -bottom-3 inset-x-0 flex justify-center">
-                                        <span className="bg-yellow-400 text-yellow-900 text-xs font-bold px-3 py-0.5 rounded-full shadow-md">1º</span>
-                                    </div>
-                                )}
-                            </div>
-                            <div className="h-32 w-full bg-gradient-to-b from-yellow-400/30 to-yellow-600/10 backdrop-blur-md rounded-t-2xl border-t border-x border-yellow-400/30 flex flex-col items-center justify-end p-3 relative overflow-hidden shadow-[0_0_30px_rgba(250,204,21,0.2)]">
-                                <div className="absolute inset-0 bg-gradient-to-t from-yellow-900/40 to-transparent" />
-                                <p className="text-white font-bold relative z-10 text-base truncate w-full text-center">
-                                    {topThree[0]?.display_name || "Vago"}
-                                </p>
-                                <p className="text-yellow-100 text-sm relative z-10 font-medium">
-                                    {topThree[0]?.total_points || 0} pts
-                                </p>
-                            </div>
-                        </div>
-
-                        {/* 3º Lugar */}
-                        <div className="flex flex-col items-center gap-2 w-1/3">
-                            <div className="relative">
-                                <Avatar className="w-14 h-14 border-4 border-orange-400 shadow-lg bg-orange-50" style={{ transform: "translateZ(0)" }}>
-                                    <AvatarImage src={topThree[2]?.avatar_url || undefined} className="object-cover w-full h-full" />
-                                    <AvatarFallback className="bg-orange-100 text-orange-600 font-bold">3</AvatarFallback>
-                                </Avatar>
-                                {topThree[2] && (
-                                    <div className="absolute -bottom-2 inset-x-0 flex justify-center">
-                                        <span className="bg-orange-400 text-orange-900 text-[10px] font-bold px-2 py-0.5 rounded-full shadow-sm">3º</span>
-                                    </div>
-                                )}
-                            </div>
-                            <div className="h-20 w-full bg-orange-700/20 backdrop-blur-sm rounded-t-2xl border-t border-x border-white/20 flex flex-col items-center justify-end p-2 relative overflow-hidden">
-                                <div className="absolute inset-0 bg-gradient-to-t from-orange-900/40 to-transparent" />
-                                <p className="text-white font-bold relative z-10 text-sm truncate w-full text-center">
-                                    {topThree[2]?.display_name || "-"}
-                                </p>
-                                <p className="text-orange-200 text-xs relative z-10">
-                                    {topThree[2]?.total_points || 0}
-                                </p>
+                                <Target className="w-3.5 h-3.5" />
+                                <span>Faltam <strong>{Math.max(0, TARGET_POINTS - myPoints)}</strong> para o iFood R$100</span>
                             </div>
                         </div>
                     </div>
                 </div>
 
-                {/* Lista Restante */}
-                <div className="flex-1 bg-card rounded-t-[2.5rem] shadow-[0_-10px_40px_rgba(0,0,0,0.1)] -mt-4 relative z-20 pb-24 overflow-hidden flex flex-col">
-                    <div className="p-6 pb-2">
-                        <h3 className="text-lg font-bold text-foreground flex items-center gap-2">
-                            <Sparkles className="w-4 h-4 text-purple-500" />
-                            Competidores
+                {/* 2. WIDGET DA COMUNIDADE (Pulse) */}
+                <div
+                    onClick={() => navigate('/comunidade')}
+                    className="group relative bg-white border border-indigo-50 rounded-2xl p-4 shadow-sm hover:shadow-md transition-all cursor-pointer overflow-hidden"
+                >
+                    <div className="absolute left-0 top-0 bottom-0 w-1 bg-gradient-to-b from-pink-500 to-purple-500" />
+
+                    <div className="flex items-center justify-between mb-2">
+                        <h3 className="text-xs font-bold text-indigo-900 uppercase tracking-wider flex items-center gap-2">
+                            <Users className="w-4 h-4 text-indigo-500" />
+                            Na Comunidade
                         </h3>
+                        <ChevronRight className="w-4 h-4 text-gray-300 group-hover:text-indigo-500 transition-colors" />
                     </div>
 
-                    <div className="overflow-y-auto flex-1 px-4 space-y-3 pb-4 scrollbar-hide">
-                        {loading ? (
-                            [1, 2, 3].map(i => <Skeleton key={i} className="h-16 w-full rounded-2xl" />)
-                        ) : restOfList.length === 0 ? (
-                            <div className="text-center py-10 text-muted-foreground opacity-60">
-                                <Users className="w-12 h-12 mx-auto mb-3 opacity-20" />
-                                <p className="text-sm">Mais competidores aparecerão aqui.</p>
+                    {latestPost ? (
+                        <div className="flex gap-3 items-start mt-1">
+                            <div className="relative">
+                                <Avatar className="w-10 h-10 border border-gray-100">
+                                    <AvatarImage src={getSecureUrl(latestPost.profiles?.avatar_url)} />
+                                    <AvatarFallback className="text-xs bg-gray-100 text-gray-500">{latestPost.profiles?.display_name?.charAt(0)}</AvatarFallback>
+                                </Avatar>
+                                <div className="absolute -bottom-1 -right-1 bg-green-500 w-3 h-3 border-2 border-white rounded-full" />
+                            </div>
+                            <div className="flex-1 min-w-0">
+                                <div className="flex justify-between items-baseline">
+                                    <p className="text-sm font-bold text-gray-800 truncate">{latestPost.profiles?.display_name}</p>
+                                    <span className="text-[10px] text-gray-400 whitespace-nowrap">{formatDistanceToNow(new Date(latestPost.created_at), { locale: ptBR, addSuffix: true })}</span>
+                                </div>
+                                <div className="flex gap-1 mt-0.5">
+                                    <Quote className="w-3 h-3 text-gray-300 fill-gray-100 shrink-0 mt-0.5" />
+                                    <p className="text-xs text-gray-600 line-clamp-2 leading-relaxed">
+                                        {latestPost.content}
+                                    </p>
+                                </div>
+                            </div>
+                        </div>
+                    ) : (
+                        <div className="flex items-center gap-3 py-1">
+                            <div className="bg-gray-50 p-2 rounded-full">
+                                <MessageCircle className="w-5 h-5 text-gray-400" />
+                            </div>
+                            <div>
+                                <p className="text-sm font-medium text-gray-600">Ainda está silencioso...</p>
+                                <p className="text-xs text-gray-400">Seja o primeiro a compartilhar uma oferta!</p>
+                            </div>
+                        </div>
+                    )}
+                </div>
+
+                {/* 3. LEADERBOARD (Design Limpo e Horizontal) */}
+                <div>
+                    <div className="flex items-center justify-between mb-4">
+                        <h2 className="text-lg font-bold text-gray-800 flex items-center gap-2">
+                            <Trophy className="w-5 h-5 text-yellow-500 fill-yellow-500" />
+                            Top 3
+                        </h2>
+                        <span className="text-xs text-muted-foreground">Atualizado agora</span>
+                    </div>
+
+                    {/* PODIUM HORIZONTAL - Mais compacto */}
+                    {topThree.length > 0 && (
+                        <div className="grid grid-cols-3 gap-3 mb-6 items-end">
+                            {/* 2º Lugar */}
+                            <div className="flex flex-col items-center">
+                                <div className="relative mb-2">
+                                    <Avatar className="w-12 h-12 border-2 border-gray-200">
+                                        <AvatarImage src={getSecureUrl(topThree[1]?.avatar_url)} />
+                                        <AvatarFallback>2</AvatarFallback>
+                                    </Avatar>
+                                    <div className="absolute -bottom-2 bg-gray-200 text-gray-600 text-[10px] font-bold px-2 py-0.5 rounded-full shadow-sm">#2</div>
+                                </div>
+                                <p className="text-xs font-bold text-gray-700 truncate w-full text-center mt-1">{topThree[1]?.display_name || "-"}</p>
+                                <p className="text-[10px] text-gray-500 font-medium">{topThree[1]?.total_points || 0}</p>
+                            </div>
+
+                            {/* 1º Lugar (Destaque) */}
+                            <div className="flex flex-col items-center relative -top-2">
+                                <Crown className="w-6 h-6 text-yellow-400 fill-yellow-400 animate-bounce mb-1" />
+                                <div className="relative mb-2">
+                                    <Avatar className="w-16 h-16 border-4 border-yellow-400 shadow-lg ring-2 ring-yellow-100">
+                                        <AvatarImage src={getSecureUrl(topThree[0]?.avatar_url)} />
+                                        <AvatarFallback className="bg-yellow-100 text-yellow-700">1</AvatarFallback>
+                                    </Avatar>
+                                    <div className="absolute -bottom-2.5 bg-yellow-400 text-yellow-900 text-xs font-bold px-3 py-0.5 rounded-full shadow-md">#1</div>
+                                </div>
+                                <p className="text-sm font-bold text-gray-800 truncate w-full text-center mt-1">{topThree[0]?.display_name || "Vago"}</p>
+                                <p className="text-xs text-yellow-600 font-bold">{topThree[0]?.total_points || 0} pts</p>
+                            </div>
+
+                            {/* 3º Lugar */}
+                            <div className="flex flex-col items-center">
+                                <div className="relative mb-2">
+                                    <Avatar className="w-12 h-12 border-2 border-orange-200">
+                                        <AvatarImage src={getSecureUrl(topThree[2]?.avatar_url)} />
+                                        <AvatarFallback>3</AvatarFallback>
+                                    </Avatar>
+                                    <div className="absolute -bottom-2 bg-orange-200 text-orange-700 text-[10px] font-bold px-2 py-0.5 rounded-full shadow-sm">#3</div>
+                                </div>
+                                <p className="text-xs font-bold text-gray-700 truncate w-full text-center mt-1">{topThree[2]?.display_name || "-"}</p>
+                                <p className="text-[10px] text-gray-500 font-medium">{topThree[2]?.total_points || 0}</p>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* LISTA DE COMPETIDORES (Minimalista) */}
+                    <div className="bg-white rounded-2xl border border-gray-100/80 shadow-sm overflow-hidden">
+                        {restOfList.length === 0 && topThree.length === 0 ? (
+                            <div className="p-8 text-center text-gray-400 text-sm">
+                                Ranking reiniciado. Seja o primeiro!
                             </div>
                         ) : (
                             restOfList.map((player) => (
                                 <div
                                     key={player.user_id}
                                     className={cn(
-                                        "flex items-center justify-between p-3 rounded-2xl border transition-all duration-200",
-                                        player.user_id === user?.id
-                                            ? "bg-indigo-50 border-indigo-200 shadow-sm scale-[1.02]"
-                                            : "bg-background border-border hover:border-primary/20"
+                                        "flex items-center justify-between p-3.5 border-b border-gray-50 last:border-0 transition-colors",
+                                        player.user_id === user?.id ? "bg-indigo-50/50" : "hover:bg-gray-50/50"
                                     )}
                                 >
-                                    <div className="flex items-center gap-3">
-                                        <span className="text-muted-foreground font-bold w-6 text-center text-sm">#{player.rank}</span>
-                                        <Avatar className="w-10 h-10 border border-border" style={{ transform: "translateZ(0)" }}>
-                                            <AvatarImage src={player.avatar_url || undefined} className="object-cover w-full h-full" />
-                                            <AvatarFallback>{player.rank}</AvatarFallback>
-                                        </Avatar>
-                                        <div className="flex flex-col">
-                                            <span className={cn("text-sm font-semibold", player.user_id === user?.id ? "text-indigo-700" : "text-foreground")}>
-                                                {player.user_id === user?.id ? (myProfile?.name || "Você") : player.display_name}
-                                            </span>
-                                            {player.user_id === user?.id && (
-                                                <span className="text-[10px] text-indigo-500 font-medium">Continue assim!</span>
-                                            )}
+                                    <div className="flex items-center gap-4">
+                                        <span className="text-gray-400 font-bold text-sm w-6 text-center">#{player.rank}</span>
+                                        <div className="flex items-center gap-3">
+                                            <Avatar className="w-9 h-9 border border-gray-100">
+                                                <AvatarImage src={getSecureUrl(player.avatar_url)} />
+                                                <AvatarFallback className="text-xs">{player.rank}</AvatarFallback>
+                                            </Avatar>
+                                            <div>
+                                                <p className={cn("text-sm font-medium truncate max-w-[140px]", player.user_id === user?.id ? "text-indigo-700" : "text-gray-700")}>
+                                                    {player.display_name}
+                                                </p>
+                                                {player.user_id === user?.id && <span className="text-[9px] text-indigo-500 font-bold uppercase tracking-wide">Você</span>}
+                                            </div>
                                         </div>
                                     </div>
-                                    <div className="bg-secondary/50 px-3 py-1.5 rounded-xl">
-                                        <span className="font-bold text-foreground text-sm">{player.total_points}</span>
-                                        <span className="text-[10px] text-muted-foreground ml-1">pts</span>
+                                    <div className="text-right">
+                                        <span className="text-sm font-bold text-gray-800">{player.total_points}</span>
+                                        <span className="text-[10px] text-gray-400 ml-1">pts</span>
                                     </div>
                                 </div>
                             ))
                         )}
                     </div>
                 </div>
+            </main>
 
+            {/* Botão Flutuante (FAB) */}
+            <div className="fixed bottom-20 left-0 right-0 px-5 z-40 pointer-events-none">
+                <div className="pointer-events-auto shadow-2xl shadow-indigo-500/30 rounded-2xl">
+                    <Button
+                        onClick={() => navigate("/listas")}
+                        className="w-full h-14 rounded-2xl bg-indigo-600 hover:bg-indigo-700 text-white text-lg font-bold flex justify-between px-6 transition-transform active:scale-98"
+                    >
+                        <span className="flex items-center gap-2"><Plus className="w-5 h-5" /> Minhas Listas</span>
+                        <span className="text-xs font-normal bg-white/20 px-2 py-1 rounded-lg flex items-center gap-1">+50 pts <ArrowRight className="w-3 h-3" /></span>
+                    </Button>
+                </div>
             </div>
 
-            <div className="fixed bottom-16 left-0 right-0 p-4 bg-gradient-to-t from-background via-background/90 to-transparent z-50">
-                <Button
-                    onClick={() => navigate("/listas")}
-                    size="lg"
-                    className="w-full h-16 rounded-2xl bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white shadow-xl shadow-indigo-500/25 flex items-center justify-between px-6 text-lg font-bold group transition-all hover:scale-[1.02] active:scale-[0.98]"
-                >
-                    <span className="flex items-center gap-3">
-                        <div className="bg-white/20 p-2 rounded-xl group-hover:rotate-12 transition-transform">
-                            <Plus className="w-6 h-6" />
-                        </div>
-                        Minhas Listas
-                    </span>
-                    <div className="flex items-center gap-2 text-sm font-normal opacity-90">
-                        <span>+50 pts</span>
-                        <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
-                    </div>
-                </Button>
-            </div>
-
-            {/* MODAL DE REGRAS */}
+            {/* Modal de Regras */}
             <Dialog open={isRulesOpen} onOpenChange={setIsRulesOpen}>
-                <DialogContent className="w-[90%] max-w-sm rounded-2xl p-6 bg-white/95 backdrop-blur-md border-white/20">
-                    <DialogHeader>
-                        <DialogTitle className="flex items-center gap-2 text-xl font-bold text-indigo-900">
-                            <Target className="w-6 h-6 text-indigo-600" />
-                            Como Ganhar o Prêmio?
-                        </DialogTitle>
-                    </DialogHeader>
-
-                    <div className="space-y-4 py-2">
-                        <div className="bg-indigo-50 p-4 rounded-xl border border-indigo-100 flex items-start gap-3">
-                            <Gift className="w-8 h-8 text-indigo-600 shrink-0 mt-1" />
+                <DialogContent className="rounded-2xl w-[90%] max-w-sm">
+                    <DialogHeader><DialogTitle className="flex items-center gap-2"><Target className="w-5 h-5 text-indigo-600" /> Objetivo</DialogTitle></DialogHeader>
+                    <div className="space-y-4 pt-2">
+                        <div className="flex items-center gap-3 bg-gradient-to-r from-green-50 to-emerald-50 p-4 rounded-xl border border-green-100">
+                            <div className="bg-white p-2 rounded-full shadow-sm"><Gift className="w-6 h-6 text-green-600" /></div>
                             <div>
-                                <h4 className="font-bold text-indigo-900">Vale iFood R$ 100</h4>
-                                <p className="text-sm text-indigo-700 leading-tight mt-1">
-                                    O primeiro jogador a atingir <strong>200 pontos</strong> no mês leva o prêmio!
-                                </p>
+                                <p className="font-bold text-green-900">Vale iFood R$ 100</p>
+                                <p className="text-xs text-green-700 mt-0.5">Para o primeiro a atingir <strong>200 pontos</strong> no mês.</p>
                             </div>
                         </div>
-
                         <div className="space-y-3">
-                            <h4 className="font-semibold text-gray-700 text-sm uppercase tracking-wide">Regras de Pontuação:</h4>
-
-                            <div className="flex items-center gap-3 p-3 rounded-lg bg-gray-50 border border-gray-100">
-                                <div className="bg-green-100 p-2 rounded-full">
-                                    <CalendarCheck className="w-5 h-5 text-green-600" />
-                                </div>
+                            <h4 className="text-xs font-bold text-gray-500 uppercase tracking-wider">Como Pontuar</h4>
+                            <div className="flex gap-3 items-start text-sm text-gray-600 bg-gray-50 p-3 rounded-lg">
+                                <CalendarCheck className="w-5 h-5 text-indigo-500 shrink-0" />
                                 <div>
-                                    <p className="font-bold text-gray-800">+50 Pontos</p>
-                                    <p className="text-xs text-gray-600">Por semana ao finalizar uma lista.</p>
+                                    <span className="font-bold text-gray-800">+50 pontos</span> por semana ao finalizar uma lista de compras com preços reais.
                                 </div>
-                            </div>
-
-                            <div className="flex items-start gap-2 text-xs text-gray-500 bg-gray-50 p-3 rounded-lg">
-                                <Info className="w-4 h-4 shrink-0 mt-0.5" />
-                                <p>
-                                    Para pontuar, a lista deve ter preços reais preenchidos no mercado.
-                                    Limitado a uma pontuação válida por semana (reset toda segunda-feira).
-                                </p>
                             </div>
                         </div>
                     </div>
-
-                    <DialogFooter>
-                        <Button
-                            className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl h-12"
-                            onClick={() => setIsRulesOpen(false)}
-                        >
-                            Entendi, vamos lá!
-                        </Button>
-                    </DialogFooter>
+                    <DialogFooter><Button className="w-full rounded-xl" onClick={() => setIsRulesOpen(false)}>Entendi</Button></DialogFooter>
                 </DialogContent>
             </Dialog>
-
         </div>
     );
 }
