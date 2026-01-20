@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
-import { Plus, MapPin, Store, Loader2 } from "lucide-react";
+import { Plus, MapPin, Store, Loader2, Search, Crown } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { AppMenu } from "@/components/AppMenu";
 import { EmptyState } from "@/components/EmptyState";
 import { useAuth } from "@/hooks/useAuth";
@@ -8,6 +9,7 @@ import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
+import { MarketCard } from "@/components/MarketCard";
 
 interface Market {
   id: string;
@@ -15,6 +17,7 @@ interface Market {
   latitude: number;
   longitude: number;
   address: string | null;
+  owner_id?: string; // Novo campo para saber quem manda
 }
 
 export default function Markets() {
@@ -23,6 +26,7 @@ export default function Markets() {
   const { toast } = useToast();
   const [markets, setMarkets] = useState<Market[]>([]);
   const [loading, setLoading] = useState(true);
+  const [searchTerm, setSearchTerm] = useState("");
 
   useEffect(() => {
     if (!authLoading && !user) {
@@ -39,13 +43,41 @@ export default function Markets() {
   const fetchMarkets = async () => {
     setLoading(true);
     try {
-      const { data, error } = await supabase
+      // 1. Busca Mercados
+      const { data: marketsData, error } = await supabase
         .from("markets")
         .select("*")
         .order("name");
 
       if (error) throw error;
-      setMarkets(data || []);
+
+      // 2. Busca os "Donos" (Top 1 score de cada mercado)
+      // Nota: Em produção com muitos dados, isso seria uma View SQL.
+      // Para agora, vamos buscar os scores e calcular.
+      const { data: scores } = await supabase
+        .from("market_scores")
+        .select("market_id, user_id, score")
+        .order("score", { ascending: false });
+
+      // Cria mapa de proprietários: { market_id: user_id_do_lider }
+      const ownersMap: Record<string, string> = {};
+
+      if (scores) {
+        scores.forEach((score) => {
+          // Como está ordenado por score DESC, o primeiro que aparece é o dono
+          if (!ownersMap[score.market_id]) {
+            ownersMap[score.market_id] = score.user_id;
+          }
+        });
+      }
+
+      // 3. Mescla dados
+      const marketsWithOwners = (marketsData || []).map((m) => ({
+        ...m,
+        owner_id: ownersMap[m.id]
+      }));
+
+      setMarkets(marketsWithOwners);
     } catch (error) {
       console.error("Error fetching markets:", error);
       toast({
@@ -58,6 +90,13 @@ export default function Markets() {
     }
   };
 
+  const filteredMarkets = markets.filter((market) =>
+    market.name.toLowerCase().includes(searchTerm.toLowerCase())
+  );
+
+  // Conta quantos territórios eu domino
+  const myTerritoriesCount = markets.filter(m => m.owner_id === user?.id).length;
+
   if (authLoading) {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
@@ -66,43 +105,50 @@ export default function Markets() {
     );
   }
 
-  if (!user) {
-    return null;
-  }
-
   return (
-    <div className="min-h-screen bg-background pb-8">
+    <div className="min-h-screen bg-background pb-20">
       <div className="flex items-center justify-between px-4 py-4 max-w-md mx-auto sticky top-0 z-30 bg-background/90 backdrop-blur-md border-b border-border">
         <div>
-          <h1 className="text-2xl font-display font-bold text-foreground">Mercados</h1>
-          <p className="text-sm text-muted-foreground">Locais cadastrados</p>
+          <h1 className="text-xl font-display font-bold text-foreground">Mercados</h1>
+          <p className="text-xs text-muted-foreground">Encontre e domine territórios</p>
         </div>
-
-        <div className="flex items-center gap-2">
-          {/* Agora navega para a página dedicada ao invés de abrir Dialog */}
-          <Button
-            size="icon"
-            variant="secondary"
-            className="text-primary h-10 w-10 rounded-xl"
-            onClick={() => navigate("/mercados/novo")}
-          >
-            <Plus className="w-6 h-6" />
-          </Button>
-
+        <div className="flex gap-2">
+          {myTerritoriesCount > 0 && (
+            <div className="flex items-center gap-1 bg-yellow-100 text-yellow-800 px-2 py-1 rounded-lg text-xs font-bold border border-yellow-200">
+              <Crown className="w-3 h-3 fill-yellow-600 text-yellow-600" />
+              {myTerritoriesCount}
+            </div>
+          )}
           <AppMenu />
         </div>
       </div>
 
-      <main className="px-4 py-4 max-w-md mx-auto">
+      <main className="px-4 py-4 max-w-md mx-auto space-y-4">
+        {/* Busca e Botão Novo */}
+        <div className="flex gap-2">
+          <div className="relative flex-1">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+            <Input
+              placeholder="Buscar mercado..."
+              className="pl-9 h-12 rounded-xl bg-secondary/30 border-transparent focus:bg-background"
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+            />
+          </div>
+          <Button onClick={() => navigate("/mercados/novo")} className="h-12 w-12 rounded-xl shrink-0 p-0" variant="outline">
+            <Plus className="w-5 h-5" />
+          </Button>
+        </div>
+
         {loading ? (
           <div className="flex items-center justify-center py-12">
             <Loader2 className="w-8 h-8 animate-spin text-primary" />
           </div>
-        ) : markets.length === 0 ? (
+        ) : filteredMarkets.length === 0 ? (
           <EmptyState
-            icon={<Store className="w-8 h-8 text-primary" />}
-            title="Nenhum mercado cadastrado"
-            description="Adicione mercados para começar a comparar preços"
+            icon={<Store className="w-10 h-10 text-primary" />}
+            title="Nenhum mercado encontrado"
+            description={searchTerm ? "Tente outro nome." : "Cadastre os mercados do seu bairro para começar a comparar preços"}
             action={
               <Button onClick={() => navigate("/mercados/novo")} className="h-12 rounded-xl">
                 <Plus className="w-5 h-5 mr-2" />
@@ -112,25 +158,15 @@ export default function Markets() {
           />
         ) : (
           <div className="space-y-3">
-            {markets.map((market, index) => (
-              <div
-                key={market.id}
-                className={cn(
-                  "flex items-center gap-4 p-4 bg-card rounded-2xl border border-border shadow-soft",
-                  "animate-slide-up"
-                )}
-                style={{ animationDelay: `${index * 50}ms` }}
-              >
-                <div className="flex items-center justify-center w-12 h-12 rounded-xl bg-primary/10 flex-shrink-0">
-                  <Store className="w-6 h-6 text-primary" />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <h3 className="font-semibold text-foreground truncate">{market.name}</h3>
-                  <p className="text-sm text-muted-foreground flex items-center gap-1.5 truncate mt-0.5">
-                    <MapPin className="w-3.5 h-3.5 flex-shrink-0" />
-                    {market.address || `${market.latitude.toFixed(5)}, ${market.longitude.toFixed(5)}`}
-                  </p>
-                </div>
+            {filteredMarkets.map((market, index) => (
+              <div key={market.id} className="animate-slide-up" style={{ animationDelay: `${index * 50}ms` }}>
+                <MarketCard
+                  id={market.id}
+                  name={market.name}
+                  address={market.address}
+                  // Se não tem listId, o card vai funcionar como link para detalhes do mercado
+                  isOwner={market.owner_id === user?.id} // <--- AQUI ESTÁ A MÁGICA
+                />
               </div>
             ))}
           </div>
