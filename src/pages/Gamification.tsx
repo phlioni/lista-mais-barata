@@ -2,7 +2,6 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
     Trophy,
-    Crown,
     Sparkles,
     Plus,
     ArrowRight,
@@ -10,29 +9,31 @@ import {
     Flame,
     Loader2,
     Settings,
-    Info,
-    CalendarCheck,
     Gift,
     Users,
     MessageCircle,
     ChevronRight,
-    Quote,
-    ShoppingBag
+    ShoppingBag,
+    Medal,
+    Crown
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Card, CardContent } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
 import { useAuth } from "@/hooks/useAuth";
 import { supabase } from "@/integrations/supabase/client";
 import { AppMenu } from "@/components/AppMenu";
 import { cn } from "@/lib/utils";
-import { Skeleton } from "@/components/ui/skeleton";
 import {
     Dialog,
     DialogContent,
     DialogHeader,
     DialogTitle,
     DialogFooter,
+    DialogTrigger,
 } from "@/components/ui/dialog";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { formatDistanceToNow } from "date-fns";
 import { ptBR } from "date-fns/locale";
 
@@ -64,9 +65,11 @@ export default function Gamification() {
     const [myRank, setMyRank] = useState<number | string>("-");
     const [myProfile, setMyProfile] = useState<{ name: string, avatar: string | null } | null>(null);
     const [isRulesOpen, setIsRulesOpen] = useState(false);
+    const [isRankingOpen, setIsRankingOpen] = useState(false);
     const [latestPost, setLatestPost] = useState<LatestPost | null>(null);
+    const [greeting, setGreeting] = useState("");
 
-    // Timestamp fixo para evitar "piscar" das imagens no Safari
+    // Timestamp para cache busting de imagens
     const [sessionTimestamp] = useState(Date.now());
 
     const TARGET_POINTS = 200;
@@ -76,6 +79,13 @@ export default function Gamification() {
         const separator = url.includes('?') ? '&' : '?';
         return `${url}${separator}t=${sessionTimestamp}`;
     };
+
+    useEffect(() => {
+        const hour = new Date().getHours();
+        if (hour < 12) setGreeting("Bom dia");
+        else if (hour < 18) setGreeting("Boa tarde");
+        else setGreeting("Boa noite");
+    }, []);
 
     useEffect(() => {
         if (!authLoading && !user) navigate("/auth");
@@ -88,7 +98,6 @@ export default function Gamification() {
     const loadData = async () => {
         setLoading(true);
         try {
-            // Executa todas as promessas em paralelo para performance máxima
             const [rankingRes, pointsRes, profileRes, postRes] = await Promise.all([
                 supabase.rpc('get_monthly_leaderboard'),
                 supabase.rpc('get_my_monthly_points'),
@@ -96,12 +105,8 @@ export default function Gamification() {
                 supabase.from('posts').select(`id, content, created_at, profiles (display_name, avatar_url)`).order('created_at', { ascending: false }).limit(1).maybeSingle()
             ]);
 
-            // 1. Processamento do Ranking
             const rankingData = rankingRes.data || [];
-            // Garante a ordem correta (maior pontuação primeiro)
             const sortedRanking = rankingData.sort((a: LeaderboardItem, b: LeaderboardItem) => b.total_points - a.total_points);
-
-            // Recalcula o rank visual
             const rankingWithCorrectRank = sortedRanking.map((item: LeaderboardItem, index: number) => ({
                 ...item,
                 rank: index + 1
@@ -109,23 +114,19 @@ export default function Gamification() {
 
             setLeaderboard(rankingWithCorrectRank);
 
-            // 2. Pontos e Rank Pessoal
             const points = pointsRes.data || 0;
             setMyPoints(points);
 
             const meInLeaderboard = rankingWithCorrectRank.find((item: LeaderboardItem) => item.user_id === user!.id);
             if (meInLeaderboard) {
                 setMyRank(meInLeaderboard.rank);
-                // Sincroniza pontos com o ranking para garantir consistência visual
                 if (meInLeaderboard.total_points > points) setMyPoints(meInLeaderboard.total_points);
             }
 
-            // 3. Perfil
             if (profileRes.data) {
-                setMyProfile({ name: profileRes.data.display_name || "Você", avatar: profileRes.data.avatar_url });
+                setMyProfile({ name: profileRes.data.display_name || "Visitante", avatar: profileRes.data.avatar_url });
             }
 
-            // 4. Último Post
             if (postRes.data) {
                 setLatestPost({
                     id: postRes.data.id,
@@ -147,263 +148,322 @@ export default function Gamification() {
     if (!user) return null;
 
     const topThree = leaderboard.slice(0, 3);
-    const restOfList = leaderboard.slice(3);
     const progress = Math.min((myPoints / TARGET_POINTS) * 100, 100);
+    const pointsToTarget = Math.max(0, TARGET_POINTS - myPoints);
 
     return (
-        <div className="min-h-screen bg-gray-50/50 pb-24 font-sans">
-            {/* Background Sutil */}
-            <div className="fixed top-0 left-0 w-full h-[400px] bg-gradient-to-b from-indigo-500/10 to-transparent -z-10" />
-
-            {/* Header Transparente */}
-            <header className="px-5 py-4 flex items-center justify-between sticky top-0 z-20 backdrop-blur-sm bg-background/60 border-b border-border/20">
-                <div>
-                    <h1 className="text-xl font-display font-bold text-foreground flex items-center gap-2">
-                        Ranking Mensal <Flame className="w-5 h-5 text-orange-500 fill-orange-500 animate-pulse" />
-                    </h1>
-                </div>
-                <div className="flex gap-2">
-                    <Button variant="ghost" size="icon" onClick={() => navigate("/configuracoes")} className="rounded-full hover:bg-background/80">
-                        <Settings className="w-5 h-5 text-muted-foreground" />
-                    </Button>
-                    <AppMenu triggerClassName="rounded-full hover:bg-background/80" />
+        <div className="min-h-screen bg-gray-50/50 font-sans pb-32">
+            {/* Header Moderno e Clean */}
+            <header className="px-6 pt-12 pb-4 bg-white border-b border-gray-100/50 sticky top-0 z-30 backdrop-blur-md bg-white/80 supports-[backdrop-filter]:bg-white/60">
+                <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                        {/* Avatar corrigido: shrink-0 evita distorção */}
+                        <Avatar className="w-10 h-10 border-2 border-indigo-100 cursor-pointer transition-transform hover:scale-105 shrink-0">
+                            <AvatarImage src={getSecureUrl(myProfile?.avatar)} className="object-cover w-full h-full aspect-square" />
+                            <AvatarFallback className="bg-indigo-50 text-indigo-600 font-bold">
+                                {myProfile?.name?.charAt(0)}
+                            </AvatarFallback>
+                        </Avatar>
+                        <div className="flex flex-col">
+                            <span className="text-xs text-muted-foreground font-medium">{greeting},</span>
+                            <span className="text-sm font-bold text-gray-900 leading-none truncate max-w-[150px]">
+                                {myProfile?.name?.split(' ')[0]}
+                            </span>
+                        </div>
+                    </div>
+                    <div className="flex gap-2">
+                        <Button variant="ghost" size="icon" onClick={() => navigate("/configuracoes")} className="text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-full">
+                            <Settings className="w-5 h-5" />
+                        </Button>
+                        <AppMenu triggerClassName="rounded-full hover:bg-indigo-50 text-gray-400 hover:text-indigo-600" />
+                    </div>
                 </div>
             </header>
 
-            <main className="px-5 py-6 space-y-6">
+            <main className="px-5 pt-6 space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
 
-                {/* 1. HERO CARD: O "Cartão de Crédito" do Jogador */}
-                <div className="relative overflow-hidden rounded-[2rem] bg-gradient-to-br from-[#4F46E5] to-[#7C3AED] p-6 text-white shadow-xl shadow-indigo-500/20">
-                    <div className="absolute top-0 right-0 -mr-8 -mt-8 w-32 h-32 rounded-full bg-white/10 blur-2xl" />
-                    <div className="absolute bottom-0 left-0 -ml-8 -mb-8 w-24 h-24 rounded-full bg-pink-500/20 blur-2xl" />
+                {/* 1. HERO CARD: Cartão de Crédito Gamificado */}
+                <section className="relative">
+                    <div className="absolute inset-0 bg-indigo-500 blur-[60px] opacity-10 rounded-full pointer-events-none transform -translate-y-10" />
+                    <Card className="border-none shadow-xl shadow-indigo-200/40 bg-gradient-to-br from-[#4F46E5] to-[#6366f1] text-white overflow-hidden relative group rounded-3xl">
+                        <div className="absolute top-0 right-0 w-64 h-64 bg-white/5 rounded-full blur-3xl -mr-16 -mt-16 pointer-events-none" />
 
-                    <div className="relative z-10">
-                        <div className="flex justify-between items-start mb-6">
-                            <div className="flex items-center gap-3">
-                                <Avatar className="w-14 h-14 border-[3px] border-white/30 shadow-inner">
-                                    <AvatarImage src={getSecureUrl(myProfile?.avatar)} className="object-cover" />
-                                    <AvatarFallback className="bg-indigo-800 text-white font-bold">EU</AvatarFallback>
-                                </Avatar>
+                        <CardContent className="p-6 relative z-10">
+                            <div className="flex justify-between items-start mb-6">
                                 <div>
-                                    <p className="text-indigo-100 text-xs font-medium uppercase tracking-wider mb-0.5">Sua Pontuação</p>
-                                    <h2 className="text-3xl font-bold tracking-tight flex items-baseline gap-1">
-                                        {myPoints} <span className="text-sm font-normal opacity-70">pts</span>
-                                    </h2>
-                                </div>
-                            </div>
-                            <div className="bg-white/20 backdrop-blur-md px-3 py-1.5 rounded-xl border border-white/10 flex flex-col items-center">
-                                <span className="text-[10px] uppercase font-bold text-indigo-100">Rank</span>
-                                <span className="text-lg font-bold leading-none">#{myRank}</span>
-                            </div>
-                        </div>
-
-                        {/* Barra de Progresso com Meta */}
-                        <div className="space-y-2">
-                            <div className="flex justify-between text-xs font-medium text-indigo-100/80">
-                                <span>Prêmio Mensal</span>
-                                <span>{Math.round(progress)}%</span>
-                            </div>
-                            <div className="h-3 bg-black/20 rounded-full p-0.5 backdrop-blur-sm overflow-hidden">
-                                <div
-                                    className="h-full bg-gradient-to-r from-yellow-300 to-orange-400 rounded-full shadow-[0_0_10px_rgba(253,186,116,0.6)] relative transition-all duration-1000"
-                                    style={{ width: `${progress}%` }}
-                                >
-                                    <div className="absolute inset-0 bg-white/30 w-full animate-[shimmer_2s_infinite]" />
-                                </div>
-                            </div>
-                            <div
-                                onClick={() => setIsRulesOpen(true)}
-                                className="flex items-center gap-1.5 text-xs text-indigo-100 mt-2 cursor-pointer hover:text-white transition-colors w-fit"
-                            >
-                                <Target className="w-3.5 h-3.5" />
-                                <span>Faltam <strong>{Math.max(0, TARGET_POINTS - myPoints)}</strong> para o iFood R$100</span>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                {/* 2. WIDGET DA COMUNIDADE */}
-                <div
-                    onClick={() => navigate('/comunidade')}
-                    className="group relative bg-white border border-indigo-50 rounded-2xl p-4 shadow-sm hover:shadow-md transition-all cursor-pointer overflow-hidden"
-                >
-                    <div className="absolute left-0 top-0 bottom-0 w-1 bg-gradient-to-b from-pink-500 to-purple-500" />
-
-                    <div className="flex items-center justify-between mb-2">
-                        <h3 className="text-xs font-bold text-indigo-900 uppercase tracking-wider flex items-center gap-2">
-                            <Users className="w-4 h-4 text-indigo-500" />
-                            Na Comunidade
-                        </h3>
-                        <ChevronRight className="w-4 h-4 text-gray-300 group-hover:text-indigo-500 transition-colors" />
-                    </div>
-
-                    {latestPost ? (
-                        <div className="flex gap-3 items-start mt-1">
-                            <div className="relative">
-                                <Avatar className="w-10 h-10 border border-gray-100">
-                                    <AvatarImage src={getSecureUrl(latestPost.profiles?.avatar_url)} />
-                                    <AvatarFallback className="text-xs bg-gray-100 text-gray-500">{latestPost.profiles?.display_name?.charAt(0)}</AvatarFallback>
-                                </Avatar>
-                                <div className="absolute -bottom-1 -right-1 bg-green-500 w-3 h-3 border-2 border-white rounded-full" />
-                            </div>
-                            <div className="flex-1 min-w-0">
-                                <div className="flex justify-between items-baseline">
-                                    <p className="text-sm font-bold text-gray-800 truncate">{latestPost.profiles?.display_name}</p>
-                                    <span className="text-[10px] text-gray-400 whitespace-nowrap">{formatDistanceToNow(new Date(latestPost.created_at), { locale: ptBR, addSuffix: true })}</span>
-                                </div>
-                                <div className="flex gap-1 mt-0.5">
-                                    <Quote className="w-3 h-3 text-gray-300 fill-gray-100 shrink-0 mt-0.5" />
-                                    <p className="text-xs text-gray-600 line-clamp-2 leading-relaxed">
-                                        {latestPost.content}
-                                    </p>
-                                </div>
-                            </div>
-                        </div>
-                    ) : (
-                        <div className="flex items-center gap-3 py-1">
-                            <div className="bg-gray-50 p-2 rounded-full">
-                                <MessageCircle className="w-5 h-5 text-gray-400" />
-                            </div>
-                            <div>
-                                <p className="text-sm font-medium text-gray-600">Ainda está silencioso...</p>
-                                <p className="text-xs text-gray-400">Seja o primeiro a compartilhar uma oferta!</p>
-                            </div>
-                        </div>
-                    )}
-                </div>
-
-                {/* 3. LEADERBOARD */}
-                <div>
-                    <div className="flex items-center justify-between mb-4">
-                        <h2 className="text-lg font-bold text-gray-800 flex items-center gap-2">
-                            <Trophy className="w-5 h-5 text-yellow-500 fill-yellow-500" />
-                            Top 3
-                        </h2>
-                        <span className="text-xs text-muted-foreground">Atualizado agora</span>
-                    </div>
-
-                    {/* PODIUM HORIZONTAL */}
-                    {topThree.length > 0 && (
-                        <div className="grid grid-cols-3 gap-3 mb-6 items-end">
-                            {/* 2º Lugar */}
-                            <div className="flex flex-col items-center">
-                                <div className="relative mb-2">
-                                    <Avatar className="w-12 h-12 border-2 border-gray-200">
-                                        <AvatarImage src={getSecureUrl(topThree[1]?.avatar_url)} />
-                                        <AvatarFallback>2</AvatarFallback>
-                                    </Avatar>
-                                    <div className="absolute -bottom-2 bg-gray-200 text-gray-600 text-[10px] font-bold px-2 py-0.5 rounded-full shadow-sm">#2</div>
-                                </div>
-                                <p className="text-xs font-bold text-gray-700 truncate w-full text-center mt-1">{topThree[1]?.display_name || "-"}</p>
-                                <p className="text-[10px] text-gray-500 font-medium">{topThree[1]?.total_points || 0}</p>
-                            </div>
-
-                            {/* 1º Lugar */}
-                            <div className="flex flex-col items-center relative -top-2">
-                                <Crown className="w-6 h-6 text-yellow-400 fill-yellow-400 animate-bounce mb-1" />
-                                <div className="relative mb-2">
-                                    <Avatar className="w-16 h-16 border-4 border-yellow-400 shadow-lg ring-2 ring-yellow-100">
-                                        <AvatarImage src={getSecureUrl(topThree[0]?.avatar_url)} />
-                                        <AvatarFallback className="bg-yellow-100 text-yellow-700">1</AvatarFallback>
-                                    </Avatar>
-                                    <div className="absolute -bottom-2.5 bg-yellow-400 text-yellow-900 text-xs font-bold px-3 py-0.5 rounded-full shadow-md">#1</div>
-                                </div>
-                                <p className="text-sm font-bold text-gray-800 truncate w-full text-center mt-1">{topThree[0]?.display_name || "Vago"}</p>
-                                <p className="text-xs text-yellow-600 font-bold">{topThree[0]?.total_points || 0} pts</p>
-                            </div>
-
-                            {/* 3º Lugar */}
-                            <div className="flex flex-col items-center">
-                                <div className="relative mb-2">
-                                    <Avatar className="w-12 h-12 border-2 border-orange-200">
-                                        <AvatarImage src={getSecureUrl(topThree[2]?.avatar_url)} />
-                                        <AvatarFallback>3</AvatarFallback>
-                                    </Avatar>
-                                    <div className="absolute -bottom-2 bg-orange-200 text-orange-700 text-[10px] font-bold px-2 py-0.5 rounded-full shadow-sm">#3</div>
-                                </div>
-                                <p className="text-xs font-bold text-gray-700 truncate w-full text-center mt-1">{topThree[2]?.display_name || "-"}</p>
-                                <p className="text-[10px] text-gray-500 font-medium">{topThree[2]?.total_points || 0}</p>
-                            </div>
-                        </div>
-                    )}
-
-                    {/* LISTA DE COMPETIDORES */}
-                    <div className="bg-white rounded-2xl border border-gray-100/80 shadow-sm overflow-hidden">
-                        {restOfList.length === 0 && topThree.length === 0 ? (
-                            <div className="p-8 text-center text-gray-400 text-sm">
-                                Ranking reiniciado. Seja o primeiro!
-                            </div>
-                        ) : (
-                            restOfList.map((player) => (
-                                <div
-                                    key={player.user_id}
-                                    className={cn(
-                                        "flex items-center justify-between p-3.5 border-b border-gray-50 last:border-0 transition-colors",
-                                        player.user_id === user?.id ? "bg-indigo-50/50" : "hover:bg-gray-50/50"
-                                    )}
-                                >
-                                    <div className="flex items-center gap-4">
-                                        <span className="text-gray-400 font-bold text-sm w-6 text-center">#{player.rank}</span>
-                                        <div className="flex items-center gap-3">
-                                            <Avatar className="w-9 h-9 border border-gray-100">
-                                                <AvatarImage src={getSecureUrl(player.avatar_url)} />
-                                                <AvatarFallback className="text-xs">{player.rank}</AvatarFallback>
-                                            </Avatar>
-                                            <div>
-                                                <p className={cn("text-sm font-medium truncate max-w-[140px]", player.user_id === user?.id ? "text-indigo-700" : "text-gray-700")}>
-                                                    {player.display_name}
-                                                </p>
-                                                {player.user_id === user?.id && <span className="text-[9px] text-indigo-500 font-bold uppercase tracking-wide">Você</span>}
-                                            </div>
+                                    <div className="flex items-center gap-2 mb-1">
+                                        <Badge className="bg-white/20 hover:bg-white/30 text-white border-none px-2 py-0.5 h-auto text-[10px] uppercase tracking-wider font-bold backdrop-blur-sm">
+                                            Ranking Mensal
+                                        </Badge>
+                                        <div className="flex items-center gap-1 text-[10px] text-indigo-200 font-medium bg-black/20 px-2 py-0.5 rounded-full">
+                                            <Trophy className="w-3 h-3 text-yellow-300" /> #{myRank} Geral
                                         </div>
                                     </div>
-                                    <div className="text-right">
-                                        <span className="text-sm font-bold text-gray-800">{player.total_points}</span>
-                                        <span className="text-[10px] text-gray-400 ml-1">pts</span>
+                                    <h2 className="text-4xl font-bold tracking-tight flex items-baseline gap-1 mt-2 font-display">
+                                        {myPoints}
+                                    </h2>
+                                    <p className="text-indigo-200 text-xs font-medium">pontos acumulados</p>
+                                </div>
+                                <div
+                                    className="bg-white/10 p-2.5 rounded-2xl backdrop-blur-md border border-white/10 cursor-pointer hover:bg-white/20 transition-colors active:scale-95"
+                                    onClick={() => setIsRulesOpen(true)}
+                                >
+                                    <Gift className="w-6 h-6 text-white animate-pulse" />
+                                </div>
+                            </div>
+
+                            <div className="space-y-2">
+                                <div className="flex justify-between text-xs font-medium text-indigo-100">
+                                    <span>Próxima recompensa</span>
+                                    <span>{Math.round(progress)}%</span>
+                                </div>
+                                <div className="relative h-2.5 bg-black/20 rounded-full overflow-hidden backdrop-blur-sm">
+                                    <div
+                                        className="absolute top-0 left-0 h-full bg-gradient-to-r from-yellow-300 to-orange-400 rounded-full transition-all duration-1000 ease-out"
+                                        style={{ width: `${progress}%` }}
+                                    >
+                                        <div className="absolute inset-0 bg-white/30 animate-[shimmer_2s_infinite]" />
                                     </div>
                                 </div>
-                            ))
+                                <p className="text-[11px] text-indigo-200 mt-2 flex items-center gap-1.5">
+                                    {pointsToTarget > 0 ? (
+                                        <>
+                                            <Target className="w-3 h-3" /> Faltam <strong>{pointsToTarget} pts</strong> para o voucher iFood
+                                        </>
+                                    ) : (
+                                        <><Sparkles className="w-3 h-3 text-yellow-300" /> Meta batida! Você é incrível.</>
+                                    )}
+                                </p>
+                            </div>
+                        </CardContent>
+                    </Card>
+                </section>
+
+                {/* 2. SUPER BUTTON: Ação Principal (Substitui o Grid) */}
+                <section>
+                    <button
+                        onClick={() => navigate("/listas")}
+                        className="w-full bg-white rounded-3xl p-5 shadow-sm border border-gray-100 flex items-center justify-between group active:scale-[0.98] transition-all hover:border-indigo-200 hover:shadow-md relative overflow-hidden"
+                    >
+                        <div className="absolute left-0 top-0 bottom-0 w-1.5 bg-indigo-500" />
+                        <div className="flex items-center gap-4">
+                            <div className="bg-indigo-50 w-12 h-12 rounded-2xl flex items-center justify-center group-hover:bg-indigo-600 transition-colors">
+                                <Plus className="w-6 h-6 text-indigo-600 group-hover:text-white transition-colors" />
+                            </div>
+                            <div className="text-left">
+                                <span className="block font-bold text-gray-900 text-lg">Nova Lista de Compras</span>
+                                <span className="text-xs text-muted-foreground group-hover:text-indigo-600 transition-colors">Comece a economizar agora</span>
+                            </div>
+                        </div>
+                        <div className="bg-green-50 px-3 py-1.5 rounded-full flex items-center gap-1.5">
+                            <span className="text-xs font-bold text-green-700">+50 pts</span>
+                            <ArrowRight className="w-3.5 h-3.5 text-green-700" />
+                        </div>
+                    </button>
+                </section>
+
+                {/* 3. COMUNIDADE (Widget Compacto) */}
+                <section>
+                    <div className="flex items-center justify-between mb-3 px-1">
+                        <h3 className="text-sm font-bold text-gray-900 flex items-center gap-2">
+                            <Users className="w-4 h-4 text-indigo-500" /> Comunidade
+                        </h3>
+                        <Button variant="ghost" size="sm" className="h-auto p-0 text-xs text-indigo-600 hover:bg-transparent hover:text-indigo-800" onClick={() => navigate("/comunidade")}>
+                            Ver tudo
+                        </Button>
+                    </div>
+
+                    <div
+                        onClick={() => navigate('/comunidade')}
+                        className="bg-white rounded-2xl p-4 shadow-sm border border-gray-100 flex items-start gap-4 active:bg-gray-50 transition-colors cursor-pointer"
+                    >
+                        {latestPost ? (
+                            <>
+                                <div className="relative shrink-0">
+                                    <Avatar className="w-10 h-10 border border-gray-100 shrink-0">
+                                        <AvatarImage src={getSecureUrl(latestPost.profiles?.avatar_url)} className="object-cover w-full h-full aspect-square" />
+                                        <AvatarFallback>{latestPost.profiles?.display_name?.charAt(0)}</AvatarFallback>
+                                    </Avatar>
+                                    <div className="absolute -bottom-1 -right-1 bg-green-500 w-3 h-3 border-2 border-white rounded-full" />
+                                </div>
+                                <div className="flex-1 min-w-0">
+                                    <div className="flex justify-between items-start">
+                                        <p className="text-sm font-bold text-gray-900 truncate pr-2">{latestPost.profiles?.display_name}</p>
+                                        <span className="text-[10px] text-gray-400 whitespace-nowrap">{formatDistanceToNow(new Date(latestPost.created_at), { locale: ptBR, addSuffix: true })}</span>
+                                    </div>
+                                    <p className="text-xs text-gray-600 mt-1 line-clamp-2 leading-relaxed">{latestPost.content}</p>
+                                </div>
+                            </>
+                        ) : (
+                            <div className="flex items-center gap-3 text-gray-500 w-full justify-center py-2">
+                                <MessageCircle className="w-5 h-5" />
+                                <span className="text-sm">Nenhuma novidade por enquanto.</span>
+                            </div>
                         )}
                     </div>
-                </div>
+                </section>
+
+                {/* 4. RANKING TOP 3 (Com gatilho para modal completo) */}
+                <section>
+                    <div className="flex items-center justify-between mb-3 px-1">
+                        <h3 className="text-sm font-bold text-gray-900 flex items-center gap-2">
+                            <Flame className="w-4 h-4 text-orange-500" /> Melhores do Mês
+                        </h3>
+                    </div>
+
+                    <Card className="border-gray-100 shadow-sm overflow-hidden rounded-2xl">
+                        <CardContent className="p-0">
+                            {/* Top 3 Visual */}
+                            {topThree.length > 0 ? (
+                                <div className="flex justify-center items-end gap-3 sm:gap-6 py-8 pb-6 bg-gradient-to-b from-white to-gray-50/80">
+
+                                    {/* 2º Lugar */}
+                                    <div className="flex flex-col items-center">
+                                        <div className="relative mb-2">
+                                            <Avatar className="w-12 h-12 border-2 border-gray-200 shrink-0 shadow-sm">
+                                                <AvatarImage src={getSecureUrl(topThree[1]?.avatar_url)} className="object-cover w-full h-full aspect-square" />
+                                                <AvatarFallback>2</AvatarFallback>
+                                            </Avatar>
+                                            <div className="absolute -bottom-2 left-1/2 -translate-x-1/2 bg-gray-200 text-gray-600 text-[10px] font-bold px-2 py-0.5 rounded-full shadow-sm">#2</div>
+                                        </div>
+                                        <span className="text-[11px] font-bold mt-1 text-gray-700 max-w-[70px] truncate text-center">{topThree[1]?.display_name}</span>
+                                        <span className="text-[10px] text-gray-400 font-medium">{topThree[1]?.total_points}</span>
+                                    </div>
+
+                                    {/* 1º Lugar */}
+                                    <div className="flex flex-col items-center -mt-6 relative z-10">
+                                        <Crown className="w-6 h-6 text-yellow-400 fill-yellow-400 animate-bounce mb-1" />
+                                        <div className="relative mb-2">
+                                            <Avatar className="w-16 h-16 border-4 border-yellow-400 shadow-lg ring-4 ring-yellow-50 shrink-0">
+                                                <AvatarImage src={getSecureUrl(topThree[0]?.avatar_url)} className="object-cover w-full h-full aspect-square" />
+                                                <AvatarFallback className="bg-yellow-100 text-yellow-700">1</AvatarFallback>
+                                            </Avatar>
+                                            <div className="absolute -bottom-2.5 left-1/2 -translate-x-1/2 bg-yellow-400 text-yellow-950 text-xs font-bold px-3 py-0.5 rounded-full shadow-md whitespace-nowrap">#1</div>
+                                        </div>
+                                        <span className="text-xs font-bold mt-1 text-gray-900 max-w-[90px] truncate text-center">{topThree[0]?.display_name}</span>
+                                        <span className="text-[11px] text-yellow-600 font-extrabold">{topThree[0]?.total_points} pts</span>
+                                    </div>
+
+                                    {/* 3º Lugar */}
+                                    <div className="flex flex-col items-center">
+                                        <div className="relative mb-2">
+                                            <Avatar className="w-12 h-12 border-2 border-orange-200 shrink-0 shadow-sm">
+                                                <AvatarImage src={getSecureUrl(topThree[2]?.avatar_url)} className="object-cover w-full h-full aspect-square" />
+                                                <AvatarFallback>3</AvatarFallback>
+                                            </Avatar>
+                                            <div className="absolute -bottom-2 left-1/2 -translate-x-1/2 bg-orange-200 text-orange-700 text-[10px] font-bold px-2 py-0.5 rounded-full shadow-sm">#3</div>
+                                        </div>
+                                        <span className="text-[11px] font-bold mt-1 text-gray-700 max-w-[70px] truncate text-center">{topThree[2]?.display_name}</span>
+                                        <span className="text-[10px] text-gray-400 font-medium">{topThree[2]?.total_points}</span>
+                                    </div>
+                                </div>
+                            ) : (
+                                <div className="p-8 text-center text-gray-400 text-sm">
+                                    Processando ranking...
+                                </div>
+                            )}
+
+                            {/* Botão para abrir o Modal de Ranking Completo */}
+                            <div
+                                className="bg-white border-t border-gray-100 p-4 text-center cursor-pointer hover:bg-gray-50 transition-colors active:bg-gray-100"
+                                onClick={() => setIsRankingOpen(true)}
+                            >
+                                <span className="text-sm font-semibold text-indigo-600 flex items-center justify-center gap-2">
+                                    Ver ranking completo <ChevronRight className="w-4 h-4" />
+                                </span>
+                            </div>
+                        </CardContent>
+                    </Card>
+                </section>
+
             </main>
 
-            {/* Botão Flutuante (FAB) */}
-            <div className="fixed bottom-20 left-0 right-0 px-5 z-40 pointer-events-none">
-                <div className="pointer-events-auto shadow-2xl shadow-indigo-500/30 rounded-2xl">
-                    <Button
-                        onClick={() => navigate("/listas")}
-                        className="w-full h-14 rounded-2xl bg-indigo-600 hover:bg-indigo-700 text-white text-lg font-bold flex justify-between px-6 transition-transform active:scale-98"
-                    >
-                        <span className="flex items-center gap-2"><Plus className="w-5 h-5" /> Minhas Listas</span>
-                        <span className="text-xs font-normal bg-white/20 px-2 py-1 rounded-lg flex items-center gap-1">+50 pts <ArrowRight className="w-3 h-3" /></span>
-                    </Button>
-                </div>
-            </div>
+            {/* MODAL: Ranking Completo */}
+            <Dialog open={isRankingOpen} onOpenChange={setIsRankingOpen}>
+                <DialogContent className="rounded-2xl w-[95%] max-w-md h-[80vh] p-0 overflow-hidden flex flex-col gap-0 bg-gray-50">
+                    <DialogHeader className="p-5 bg-white border-b border-gray-100 shrink-0">
+                        <DialogTitle className="flex items-center gap-2 text-lg">
+                            <Trophy className="w-5 h-5 text-yellow-500 fill-yellow-500" /> Ranking do Mês
+                        </DialogTitle>
+                    </DialogHeader>
 
-            {/* Modal de Regras */}
+                    <ScrollArea className="flex-1 p-4">
+                        <div className="space-y-1">
+                            {leaderboard.length === 0 ? (
+                                <div className="text-center py-10 text-gray-500">Nenhum competidor ainda.</div>
+                            ) : (
+                                leaderboard.map((player) => (
+                                    <div
+                                        key={player.user_id}
+                                        className={cn(
+                                            "flex items-center justify-between p-3 rounded-xl transition-all border",
+                                            player.user_id === user?.id
+                                                ? "bg-indigo-50 border-indigo-200 shadow-sm"
+                                                : "bg-white border-transparent hover:border-gray-200"
+                                        )}
+                                    >
+                                        <div className="flex items-center gap-3">
+                                            <div className={cn(
+                                                "w-8 text-center font-bold text-sm",
+                                                player.rank <= 3 ? "text-yellow-600 text-lg" : "text-gray-400"
+                                            )}>
+                                                #{player.rank}
+                                            </div>
+                                            <Avatar className="w-10 h-10 border border-gray-100 shrink-0">
+                                                <AvatarImage src={getSecureUrl(player.avatar_url)} className="object-cover w-full h-full aspect-square" />
+                                                <AvatarFallback className="text-xs font-bold text-gray-500 bg-gray-100">{player.rank}</AvatarFallback>
+                                            </Avatar>
+                                            <div>
+                                                <p className={cn(
+                                                    "text-sm font-bold truncate max-w-[120px]",
+                                                    player.user_id === user?.id ? "text-indigo-700" : "text-gray-700"
+                                                )}>
+                                                    {player.display_name}
+                                                    {player.user_id === user?.id && " (Você)"}
+                                                </p>
+                                                {player.rank <= 3 && <span className="text-[9px] text-yellow-600 bg-yellow-50 px-1.5 py-0.5 rounded font-bold">Top Player</span>}
+                                            </div>
+                                        </div>
+                                        <div className="text-right">
+                                            <span className="block text-sm font-bold text-gray-900">{player.total_points}</span>
+                                            <span className="text-[10px] text-gray-400 uppercase">Pontos</span>
+                                        </div>
+                                    </div>
+                                ))
+                            )}
+                        </div>
+                    </ScrollArea>
+
+                    <div className="p-4 bg-white border-t border-gray-100 text-center text-xs text-gray-400 shrink-0">
+                        O ranking atualiza em tempo real. Continue pontuando!
+                    </div>
+                </DialogContent>
+            </Dialog>
+
+            {/* MODAL: Regras (Mantido) */}
             <Dialog open={isRulesOpen} onOpenChange={setIsRulesOpen}>
                 <DialogContent className="rounded-2xl w-[90%] max-w-sm">
-                    <DialogHeader><DialogTitle className="flex items-center gap-2"><Target className="w-5 h-5 text-indigo-600" /> Objetivo</DialogTitle></DialogHeader>
+                    <DialogHeader><DialogTitle className="flex items-center gap-2"><Target className="w-5 h-5 text-indigo-600" /> Como Ganhar</DialogTitle></DialogHeader>
                     <div className="space-y-4 pt-2">
-                        <div className="flex items-center gap-3 bg-gradient-to-r from-green-50 to-emerald-50 p-4 rounded-xl border border-green-100">
-                            <div className="bg-white p-2 rounded-full shadow-sm"><Gift className="w-6 h-6 text-green-600" /></div>
+                        <div className="flex items-center gap-3 bg-gradient-to-r from-indigo-50 to-purple-50 p-4 rounded-xl border border-indigo-100">
+                            <div className="bg-white p-2 rounded-full shadow-sm"><Gift className="w-6 h-6 text-indigo-600" /></div>
                             <div>
-                                <p className="font-bold text-green-900">Vale iFood R$ 100</p>
-                                <p className="text-xs text-green-700 mt-0.5">Para o primeiro a atingir <strong>200 pontos</strong> no mês.</p>
+                                <p className="font-bold text-indigo-900">Vale iFood R$ 100</p>
+                                <p className="text-xs text-indigo-700 mt-0.5">Meta Mensal: <strong>200 pontos</strong></p>
                             </div>
                         </div>
                         <div className="space-y-3">
-                            <h4 className="text-xs font-bold text-gray-500 uppercase tracking-wider">Como Pontuar</h4>
-                            <div className="flex gap-3 items-start text-sm text-gray-600 bg-gray-50 p-3 rounded-lg">
-                                <CalendarCheck className="w-5 h-5 text-indigo-500 shrink-0" />
+                            <h4 className="text-xs font-bold text-gray-500 uppercase tracking-wider">Missões</h4>
+                            <div className="flex gap-3 items-center text-sm text-gray-700 bg-white border border-gray-100 p-3 rounded-lg shadow-sm">
+                                <div className="bg-green-100 p-1.5 rounded-md"><ShoppingBag className="w-4 h-4 text-green-700" /></div>
                                 <div>
-                                    <span className="font-bold text-gray-800">+50 pontos</span> por semana ao finalizar uma lista de compras com preços reais.
+                                    <span className="font-bold block">Finalizar Lista</span>
+                                    <span className="text-xs text-gray-500">+50 pontos por semana</span>
                                 </div>
                             </div>
                         </div>
                     </div>
-                    <DialogFooter><Button className="w-full rounded-xl" onClick={() => setIsRulesOpen(false)}>Entendi</Button></DialogFooter>
+                    <DialogFooter><Button className="w-full rounded-xl bg-indigo-600 hover:bg-indigo-700" onClick={() => setIsRulesOpen(false)}>Bora pontuar!</Button></DialogFooter>
                 </DialogContent>
             </Dialog>
         </div>

@@ -1,7 +1,7 @@
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import {
-    MapPin, Heart, MessageCircle, Send, Loader2, Store, Plus, Image as ImageIcon, X, ArrowLeft
+    MapPin, Heart, MessageCircle, Send, Loader2, Store, Plus, Image as ImageIcon, X, ArrowLeft, MoreHorizontal, CornerDownRight, Search, Trash2, Flag, AlertTriangle
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -16,7 +16,15 @@ import { useToast } from "@/hooks/use-toast";
 import { formatDistanceToNow } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import { cn } from "@/lib/utils";
+import { Card } from "@/components/ui/card";
+import {
+    DropdownMenu,
+    DropdownMenuContent,
+    DropdownMenuItem,
+    DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
+// Interfaces
 interface Post {
     id: string;
     content: string;
@@ -58,10 +66,11 @@ export default function Community() {
     const fileInputRef = useRef<HTMLInputElement>(null);
 
     const [sessionTimestamp] = useState(Date.now());
-    const getSecureUrl = (url: string | null | undefined) => {
+
+    const getSecureUrl = useCallback((url: string | null | undefined) => {
         if (!url) return undefined;
         return `${url}${url.includes('?') ? '&' : '?'}t=${sessionTimestamp}`;
-    };
+    }, [sessionTimestamp]);
 
     // Estados
     const [posts, setPosts] = useState<Post[]>([]);
@@ -79,6 +88,7 @@ export default function Community() {
     const [mentionQuery, setMentionQuery] = useState<string | null>(null);
     const [marketSuggestions, setMarketSuggestions] = useState<MarketSimple[]>([]);
     const [linkedMarket, setLinkedMarket] = useState<MarketSimple | null>(null);
+    const [isSearchingMarkets, setIsSearchingMarkets] = useState(false);
 
     // Comentários
     const [activePostForComments, setActivePostForComments] = useState<Post | null>(null);
@@ -88,44 +98,55 @@ export default function Community() {
 
     // 1. GPS
     useEffect(() => {
+        const cachedLoc = sessionStorage.getItem('user_location');
+        if (cachedLoc) {
+            setLocation(JSON.parse(cachedLoc));
+        }
+
         if ("geolocation" in navigator) {
             navigator.geolocation.getCurrentPosition(
-                (position) => setLocation({ lat: position.coords.latitude, lng: position.coords.longitude }),
+                (position) => {
+                    const newLoc = { lat: position.coords.latitude, lng: position.coords.longitude };
+                    setLocation(newLoc);
+                    sessionStorage.setItem('user_location', JSON.stringify(newLoc));
+                },
                 () => {
-                    toast({ title: "GPS necessário", description: "Ative a localização.", variant: "destructive" });
-                    setLoading(false);
-                }
+                    if (!cachedLoc) {
+                        toast({ title: "Localização necessária", description: "Ative o GPS para ver ofertas.", variant: "destructive", duration: 2000 });
+                        setLoading(false);
+                    }
+                },
+                { timeout: 10000, maximumAge: 60000 }
             );
         } else setLoading(false);
     }, []);
 
     // 2. Fetch Posts
-    useEffect(() => {
-        if (location) fetchPosts();
-    }, [location]);
-
-    const fetchPosts = async () => {
+    const fetchPosts = useCallback(async () => {
+        if (!location) return;
         try {
             const { data, error } = await supabase.rpc('get_posts_in_radius', {
-                user_lat: location!.lat,
-                user_long: location!.lng,
-                radius_km: 25 // 25km de raio
+                user_lat: location.lat,
+                user_long: location.lng,
+                radius_km: 25
             });
             if (error) throw error;
             setPosts(data || []);
         } catch (error) {
-            console.error(error);
+            console.error("Erro ao carregar posts:", error);
         } finally {
             setLoading(false);
         }
-    };
+    }, [location]);
+
+    useEffect(() => {
+        if (location) fetchPosts();
+    }, [fetchPosts]);
 
     const handleTextChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
         const value = e.target.value;
         setNewContent(value);
 
-        // Detecta @ para menção
-        // Pega a palavra atual sendo digitada
         const cursorPosition = e.target.selectionStart;
         const textBeforeCursor = value.substring(0, cursorPosition);
         const words = textBeforeCursor.split(/\s+/);
@@ -141,21 +162,32 @@ export default function Community() {
         }
     };
 
-    const searchMarkets = async (query: string) => {
-        const { data } = await supabase.from('markets').select('id, name, address').ilike('name', `%${query}%`).limit(5);
-        setMarketSuggestions(data || []);
+    const searchTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+    const searchMarkets = (query: string) => {
+        setIsSearchingMarkets(true);
+        if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
+
+        searchTimerRef.current = setTimeout(async () => {
+            const { data } = await supabase.from('markets')
+                .select('id, name, address')
+                .ilike('name', `%${query}%`)
+                .limit(50); // Limite alto para garantir resultados
+
+            setMarketSuggestions(data || []);
+            setIsSearchingMarkets(false);
+        }, 300);
     };
 
     const selectMarketMention = (market: MarketSimple) => {
-        // Substitui a palavra atual (@query) pelo nome do mercado
         const cursorPosition = (document.getElementById('post-textarea') as HTMLTextAreaElement)?.selectionStart || newContent.length;
         const textBeforeCursor = newContent.substring(0, cursorPosition);
         const textAfterCursor = newContent.substring(cursorPosition);
 
         const words = textBeforeCursor.split(/\s+/);
-        words.pop(); // Remove o termo de busca incompleto
+        words.pop();
 
-        const newText = `${words.join(" ")} @${market.name} ${textAfterCursor}`;
+        const newText = `${words.join(" ")} ${market.name} ${textAfterCursor}`;
 
         setNewContent(newText);
         setLinkedMarket(market);
@@ -163,18 +195,16 @@ export default function Community() {
         setMarketSuggestions([]);
     };
 
-    // --- FUNÇÃO RESTAURADA ---
     const handleImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
         if (file) {
-            if (file.size > 5 * 1024 * 1024) return toast({ title: "Erro", description: "Máximo 5MB", variant: "destructive" });
+            if (file.size > 5 * 1024 * 1024) return toast({ title: "Arquivo muito grande", description: "Máximo de 5MB.", variant: "destructive", duration: 2000 });
             setSelectedImage(file);
             const reader = new FileReader();
             reader.onloadend = () => setImagePreview(reader.result as string);
             reader.readAsDataURL(file);
         }
     };
-    // -------------------------
 
     const handleCreatePost = async () => {
         if (!newContent.trim() && !selectedImage) return;
@@ -195,10 +225,42 @@ export default function Community() {
                 latitude: location!.lat, longitude: location!.lng
             });
             if (error) throw error;
-            toast({ title: "Sucesso!", description: "Post publicado." });
+            toast({ title: "Publicado!", description: "Sua oferta foi compartilhada.", duration: 2000 });
             setNewContent(""); setSelectedImage(null); setImagePreview(null); setLinkedMarket(null); setIsCreateOpen(false); fetchPosts();
-        } catch (error) { toast({ title: "Erro", variant: "destructive" }); }
+        } catch (error) { toast({ title: "Erro", variant: "destructive", duration: 2000 }); }
         finally { setIsPosting(false); }
+    };
+
+    const handleDeletePost = async (postId: string) => {
+        const previousPosts = [...posts];
+        setPosts(posts.filter(p => p.id !== postId));
+
+        try {
+            const { data, error } = await supabase
+                .from('posts')
+                .delete()
+                .eq('id', postId)
+                .eq('user_id', user!.id)
+                .select();
+
+            if (error) throw error;
+
+            if (!data || data.length === 0) {
+                throw new Error("Permissão negada ou post já apagado.");
+            }
+
+            toast({ title: "Post apagado", description: "Removido com sucesso.", duration: 2000 });
+
+        } catch (error: any) {
+            console.error("Erro ao deletar:", error);
+            setPosts(previousPosts);
+            toast({
+                title: "Erro ao apagar",
+                description: "Não foi possível remover o post.",
+                variant: "destructive",
+                duration: 2000
+            });
+        }
     };
 
     const handleLike = async (post: Post) => {
@@ -220,7 +282,7 @@ export default function Community() {
             if (error) throw error;
             // @ts-ignore
             setComments(data || []);
-        } catch (error) { toast({ title: "Erro", description: "Falha ao carregar comentários." }); }
+        } catch (error) { toast({ title: "Erro", description: "Falha ao carregar comentários.", duration: 2000 }); }
         finally { setLoadingComments(false); }
     };
 
@@ -235,152 +297,334 @@ export default function Community() {
         const { error } = await supabase.from('post_comments').insert({ post_id: activePostForComments.id, user_id: user!.id, content: tempComment.content });
         if (error) {
             setComments(comments.filter(c => c.id !== fakeId));
-            toast({ title: "Erro ao comentar", variant: "destructive" });
+            toast({ title: "Erro ao comentar", variant: "destructive", duration: 2000 });
         } else {
             setPosts(posts.map(p => p.id === activePostForComments.id ? { ...p, comments_count: p.comments_count + 1 } : p));
         }
     };
 
     return (
-        <div className="min-h-screen bg-background/50 pb-24">
-            {/* Header */}
-            <div className="bg-background/80 backdrop-blur-md px-4 py-4 sticky top-0 z-20 border-b border-border/40 flex justify-between items-center">
-                <div className="flex items-center gap-3">
-                    <Button variant="ghost" size="icon" onClick={() => navigate(-1)} className="-ml-2">
-                        <ArrowLeft className="w-5 h-5 text-muted-foreground" />
-                    </Button>
-                    <div>
-                        <h1 className="text-xl font-display font-bold bg-gradient-to-r from-indigo-600 to-pink-500 bg-clip-text text-transparent">Comunidade</h1>
-                        <p className="text-xs text-muted-foreground flex items-center gap-1"><MapPin className="w-3 h-3" /> Raio de 25km</p>
+        <div className="min-h-screen bg-gray-50 pb-24 font-sans">
+            <header className="fixed top-0 left-0 right-0 z-40 bg-white/80 backdrop-blur-md border-b border-gray-100 transition-all duration-300">
+                <div className="px-5 py-3 flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                        <Button variant="ghost" size="icon" onClick={() => navigate(-1)} className="rounded-full hover:bg-gray-100 -ml-2 text-gray-500">
+                            <ArrowLeft className="w-6 h-6" />
+                        </Button>
+                        <div>
+                            <h1 className="text-lg font-bold text-gray-900 tracking-tight">Comunidade</h1>
+                            {location && (
+                                <p className="text-xs text-indigo-600 font-medium flex items-center gap-1 animate-pulse">
+                                    <MapPin className="w-3 h-3 fill-indigo-600" /> Explorando ofertas próximas
+                                </p>
+                            )}
+                        </div>
                     </div>
+                    <AppMenu triggerClassName="rounded-full hover:bg-gray-100 p-2 text-gray-500" />
                 </div>
-                <AppMenu triggerClassName="text-foreground/80 hover:bg-secondary/50 p-2 rounded-full" />
-            </div>
+            </header>
 
-            {/* Feed */}
-            <main className="px-4 pt-4 space-y-6 max-w-lg mx-auto">
+            <main className="pt-20 px-4 space-y-5 max-w-lg mx-auto">
                 {loading ? (
-                    <div className="flex justify-center pt-20"><Loader2 className="w-8 h-8 animate-spin text-primary" /></div>
+                    <div className="flex flex-col items-center justify-center pt-32 gap-3 text-gray-400">
+                        <Loader2 className="w-8 h-8 animate-spin text-indigo-500" />
+                        <span className="text-sm">Buscando ofertas...</span>
+                    </div>
                 ) : posts.length === 0 ? (
-                    <div className="text-center py-16 px-4">
-                        <p className="text-muted-foreground">Seja o primeiro a postar na sua região!</p>
+                    <div className="text-center py-20 px-6">
+                        <div className="bg-indigo-50 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4">
+                            <MessageCircle className="w-8 h-8 text-indigo-400" />
+                        </div>
+                        <h3 className="text-gray-900 font-bold mb-1">Tudo quieto por aqui</h3>
+                        <p className="text-gray-500 text-sm">Seja o primeiro a compartilhar uma oferta ou dica na sua região!</p>
                     </div>
                 ) : (
                     posts.map((post) => (
-                        <article key={post.id} className="bg-card/50 backdrop-blur-sm border-none shadow-md shadow-indigo-100/50 rounded-[2rem] p-5 animate-fade-in">
-                            <div className="flex items-start justify-between mb-3">
-                                <div className="flex items-center gap-3">
-                                    <Avatar className="w-11 h-11 border-2 border-white shadow-sm">
-                                        <AvatarImage src={getSecureUrl(post.author_avatar)} className="object-cover" />
-                                        <AvatarFallback>{post.author_name?.charAt(0)}</AvatarFallback>
-                                    </Avatar>
-                                    <div>
-                                        <p className="font-bold text-[15px]">{post.author_name}</p>
-                                        <div className="flex items-center text-xs text-muted-foreground gap-2 mt-0.5">
-                                            <span>{formatDistanceToNow(new Date(post.created_at), { addSuffix: true, locale: ptBR })}</span>
+                        <Card key={post.id} className="border-none shadow-sm shadow-indigo-100 rounded-3xl overflow-hidden bg-white hover:shadow-md transition-shadow duration-300">
+                            <div className="p-5 pb-3">
+                                {/* Header do Post */}
+                                <div className="flex items-start justify-between mb-3">
+                                    <div className="flex items-center gap-3">
+                                        <Avatar className="w-10 h-10 border border-gray-100 cursor-pointer hover:opacity-80 transition-opacity">
+                                            <AvatarImage src={getSecureUrl(post.author_avatar)} className="object-cover" />
+                                            <AvatarFallback className="bg-gray-100 text-gray-500 font-bold text-xs">
+                                                {post.author_name?.charAt(0)}
+                                            </AvatarFallback>
+                                        </Avatar>
+                                        <div className="flex flex-col">
+                                            <div className="flex items-center gap-2">
+                                                <span className="font-bold text-sm text-gray-900 leading-none">{post.author_name}</span>
+                                                <span className="text-[10px] text-gray-400 font-medium">• {formatDistanceToNow(new Date(post.created_at), { addSuffix: true, locale: ptBR })}</span>
+                                            </div>
+
                                             {post.market_name && (
-                                                <button
+                                                <div
                                                     onClick={(e) => { e.stopPropagation(); if (post.market_id) navigate(`/ver-mercado/${post.market_id}`); }}
-                                                    className="flex items-center text-indigo-600 font-bold hover:underline bg-indigo-50 px-2 py-0.5 rounded-md transition-colors"
+                                                    className="flex items-center gap-1 mt-1 text-xs font-semibold text-indigo-600 cursor-pointer hover:underline w-fit"
                                                 >
-                                                    <Store className="w-3 h-3 mr-1" /> @{post.market_name}
-                                                </button>
+                                                    <Store className="w-3 h-3" />
+                                                    {post.market_name}
+                                                    <CornerDownRight className="w-3 h-3 text-gray-300 ml-0.5" />
+                                                </div>
                                             )}
                                         </div>
                                     </div>
+
+                                    {/* MENU 3 PONTOS */}
+                                    <DropdownMenu>
+                                        <DropdownMenuTrigger asChild>
+                                            <Button variant="ghost" size="icon" className="h-8 w-8 text-gray-400 -mr-2 rounded-full hover:bg-gray-100 transition-colors focus-visible:ring-0">
+                                                <MoreHorizontal className="w-4 h-4" />
+                                            </Button>
+                                        </DropdownMenuTrigger>
+                                        <DropdownMenuContent align="end" className="w-40 rounded-xl border-gray-100 shadow-xl">
+                                            {post.user_id === user?.id ? (
+                                                <DropdownMenuItem
+                                                    className="text-red-600 focus:text-red-600 focus:bg-red-50 cursor-pointer gap-2 font-medium"
+                                                    onClick={() => handleDeletePost(post.id)}
+                                                >
+                                                    <Trash2 className="w-4 h-4" />
+                                                    Apagar
+                                                </DropdownMenuItem>
+                                            ) : (
+                                                <DropdownMenuItem
+                                                    className="text-gray-600 focus:bg-gray-50 cursor-pointer gap-2"
+                                                    onClick={() => toast({ title: "Reportado", description: "Obrigado por colaborar.", duration: 2000 })}
+                                                >
+                                                    <Flag className="w-4 h-4" />
+                                                    Reportar
+                                                </DropdownMenuItem>
+                                            )}
+                                        </DropdownMenuContent>
+                                    </DropdownMenu>
                                 </div>
+
+                                <p className="text-[15px] leading-relaxed text-gray-800 whitespace-pre-wrap mb-2">
+                                    {post.content}
+                                </p>
                             </div>
-                            <p className="text-[15px] text-foreground/90 mb-4 whitespace-pre-wrap">{post.content}</p>
+
                             {post.image_url && (
-                                <div className="mb-4 rounded-2xl overflow-hidden shadow-sm aspect-[4/3] bg-secondary/20">
-                                    <img src={post.image_url} alt="Oferta" className="w-full h-full object-cover" loading="lazy" />
+                                <div className="w-full bg-gray-50">
+                                    <img
+                                        src={post.image_url}
+                                        alt="Foto da oferta"
+                                        className="w-full h-auto object-cover max-h-[500px]"
+                                        loading="lazy"
+                                    />
                                 </div>
                             )}
-                            <div className="flex items-center gap-6 pt-3 border-t border-border/40">
-                                <button onClick={() => handleLike(post)} className={cn("flex items-center gap-2 text-sm transition-all group", post.liked_by_me ? "text-rose-500 font-medium" : "text-muted-foreground")}>
-                                    <Heart className={cn("w-6 h-6 transition-transform group-active:scale-125", post.liked_by_me ? "fill-current" : "stroke-[1.5px]")} />
-                                    <span>{post.likes_count > 0 && post.likes_count}</span>
+
+                            <div className="px-5 py-3 flex items-center gap-6">
+                                <button
+                                    onClick={() => handleLike(post)}
+                                    className="flex items-center gap-2 group focus:outline-none"
+                                >
+                                    <div className={cn(
+                                        "p-2 rounded-full transition-colors",
+                                        post.liked_by_me ? "bg-rose-50" : "group-hover:bg-gray-100"
+                                    )}>
+                                        <Heart
+                                            className={cn(
+                                                "w-6 h-6 transition-all duration-300",
+                                                post.liked_by_me ? "fill-rose-500 text-rose-500 scale-110" : "text-gray-500 group-hover:text-gray-700"
+                                            )}
+                                        />
+                                    </div>
+                                    {post.likes_count > 0 && (
+                                        <span className={cn(
+                                            "text-sm font-semibold",
+                                            post.liked_by_me ? "text-rose-600" : "text-gray-500"
+                                        )}>
+                                            {post.likes_count}
+                                        </span>
+                                    )}
                                 </button>
-                                <button onClick={() => openComments(post)} className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors">
-                                    <MessageCircle className="w-6 h-6 stroke-[1.5px]" />
-                                    <span>{post.comments_count > 0 && post.comments_count}</span>
+
+                                <button
+                                    onClick={() => openComments(post)}
+                                    className="flex items-center gap-2 group focus:outline-none"
+                                >
+                                    <div className="p-2 rounded-full group-hover:bg-indigo-50 transition-colors">
+                                        <MessageCircle className="w-6 h-6 text-gray-500 group-hover:text-indigo-600 transition-colors" />
+                                    </div>
+                                    {post.comments_count > 0 && (
+                                        <span className="text-sm font-semibold text-gray-500 group-hover:text-indigo-600">
+                                            {post.comments_count}
+                                        </span>
+                                    )}
                                 </button>
                             </div>
-                        </article>
+                        </Card>
                     ))
                 )}
             </main>
 
-            {/* FAB (Botão de Criar Post) */}
-            <Dialog open={isCreateOpen} onOpenChange={setIsCreateOpen}>
-                <DialogTrigger asChild>
-                    <Button className="fixed bottom-24 right-5 h-16 w-16 rounded-full shadow-2xl bg-gradient-to-tr from-indigo-500 to-pink-500 hover:scale-105 transition-transform text-white z-40">
-                        <Plus className="w-8 h-8" strokeWidth={2.5} />
-                    </Button>
-                </DialogTrigger>
-                {/* Removido overflow-hidden para permitir que a lista de sugestões saia se necessário */}
-                <DialogContent className="w-[95%] max-w-md rounded-[2rem] top-[10%] translate-y-0 p-0 bg-background/95 backdrop-blur-xl border-white/20">
-                    <DialogHeader className="px-6 pt-6 pb-2"><DialogTitle>Nova Publicação</DialogTitle></DialogHeader>
-                    <div className="space-y-4 p-6 pt-2">
-                        <div className="relative">
-                            <Textarea
-                                id="post-textarea"
-                                placeholder="Use @ para marcar um mercado..."
-                                value={newContent}
-                                onChange={handleTextChange}
-                                className="min-h-[120px] text-base bg-transparent border-none focus-visible:ring-0 resize-none p-0"
-                            />
+            <div className="fixed bottom-24 right-6 z-30">
+                <Dialog open={isCreateOpen} onOpenChange={setIsCreateOpen}>
+                    <DialogTrigger asChild>
+                        <Button className="h-14 w-14 rounded-2xl shadow-xl bg-indigo-600 hover:bg-indigo-700 text-white transition-all hover:scale-105 active:scale-95 flex items-center justify-center">
+                            <Plus className="w-7 h-7" />
+                        </Button>
+                    </DialogTrigger>
 
-                            {/* LISTA DE SUGESTÕES (Abaixo do Texto - top-full) */}
-                            {mentionQuery !== null && marketSuggestions.length > 0 && (
-                                <div className="absolute top-full left-0 w-full mt-2 bg-popover border rounded-xl shadow-xl z-50 overflow-hidden max-h-48 overflow-y-auto animate-in fade-in slide-in-from-top-2">
-                                    {marketSuggestions.map(m => (
-                                        <div key={m.id} onClick={() => selectMarketMention(m)} className="p-3 hover:bg-muted cursor-pointer text-sm border-b last:border-none flex flex-col">
-                                            <span className="font-bold text-indigo-600">@{m.name}</span>
-                                            <span className="text-xs text-muted-foreground truncate">{m.address}</span>
+                    <DialogContent className="w-[95%] max-w-lg rounded-3xl p-0 gap-0 overflow-hidden bg-white sm:w-full border-none">
+                        <DialogHeader className="px-5 py-4 border-b border-gray-100 flex flex-row items-center justify-between space-y-0 bg-white z-20">
+                            <DialogTitle className="text-lg font-bold text-gray-900">Novo Post</DialogTitle>
+                            <Button
+                                onClick={handleCreatePost}
+                                disabled={isPosting || (!newContent && !selectedImage)}
+                                className="rounded-full px-5 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold disabled:opacity-50 h-9"
+                            >
+                                {isPosting ? <Loader2 className="w-4 h-4 animate-spin" /> : "Publicar"}
+                            </Button>
+                        </DialogHeader>
+
+                        <div className="p-5 flex flex-col gap-4 relative max-h-[60vh] overflow-y-auto">
+                            <div className="flex gap-3">
+                                <Avatar className="w-10 h-10 border border-gray-100 shrink-0">
+                                    <AvatarImage src={getSecureUrl(user?.user_metadata?.avatar_url)} />
+                                    <AvatarFallback className="bg-indigo-50 text-indigo-600 font-bold">EU</AvatarFallback>
+                                </Avatar>
+
+                                <div className="flex-1">
+                                    <Textarea
+                                        id="post-textarea"
+                                        placeholder="O que você encontrou de bom? Use @ para marcar um mercado."
+                                        value={newContent}
+                                        onChange={handleTextChange}
+                                        className="w-full min-h-[120px] text-lg leading-relaxed border-none focus-visible:ring-0 p-2 placeholder:text-gray-300 resize-none font-medium"
+                                    />
+
+                                    {/* LISTA DE SUGESTÕES (Corrigida: Estática abaixo do input) */}
+                                    {mentionQuery !== null && (
+                                        <div className="mt-2 w-full bg-white rounded-xl border border-indigo-100 shadow-lg overflow-hidden animate-in fade-in slide-in-from-top-2">
+                                            <div className="bg-indigo-50/50 px-3 py-2 flex items-center justify-between border-b border-indigo-50">
+                                                <span className="text-[10px] font-bold text-indigo-400 uppercase tracking-wider flex items-center gap-1">
+                                                    <Search className="w-3 h-3" />
+                                                    {isSearchingMarkets ? "Buscando..." : "Selecione o Mercado"}
+                                                </span>
+                                            </div>
+                                            <div className="max-h-[220px] overflow-y-auto">
+                                                {marketSuggestions.map(m => (
+                                                    <div
+                                                        key={m.id}
+                                                        onClick={() => selectMarketMention(m)}
+                                                        className="p-3 hover:bg-indigo-50 cursor-pointer flex items-center justify-between group transition-colors border-b last:border-0 border-gray-50"
+                                                    >
+                                                        <div className="flex flex-col">
+                                                            <span className="font-bold text-sm text-gray-800 group-hover:text-indigo-700">{m.name}</span>
+                                                            <span className="text-xs text-gray-400 truncate max-w-[180px]">{m.address}</span>
+                                                        </div>
+                                                        <Plus className="w-4 h-4 text-gray-300 group-hover:text-indigo-500" />
+                                                    </div>
+                                                ))}
+                                                {!isSearchingMarkets && marketSuggestions.length === 0 && (
+                                                    <div className="p-4 text-center text-xs text-gray-400">Nenhum mercado encontrado.</div>
+                                                )}
+                                            </div>
                                         </div>
-                                    ))}
+                                    )}
+
+                                    {linkedMarket && (
+                                        <div className="mt-2 inline-flex items-center gap-2 px-3 py-1.5 bg-indigo-50 text-indigo-700 rounded-full text-xs font-bold animate-in fade-in slide-in-from-bottom-2">
+                                            <Store className="w-3.5 h-3.5" />
+                                            {linkedMarket.name}
+                                            <button onClick={() => setLinkedMarket(null)} className="hover:bg-indigo-100 rounded-full p-0.5 ml-1">
+                                                <X className="w-3 h-3" />
+                                            </button>
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+
+                            {imagePreview && (
+                                <div className="relative rounded-2xl overflow-hidden shadow-sm border border-gray-100 group mt-2">
+                                    <img src={imagePreview} className="w-full max-h-[300px] object-cover" />
+                                    <button
+                                        onClick={() => { setImagePreview(null); setSelectedImage(null); }}
+                                        className="absolute top-2 right-2 bg-black/70 hover:bg-black/90 text-white rounded-full p-1.5 backdrop-blur-sm transition-colors z-10"
+                                    >
+                                        <X className="w-5 h-5" />
+                                    </button>
                                 </div>
                             )}
                         </div>
-                        {imagePreview && (
-                            <div className="relative rounded-xl overflow-hidden h-40 bg-secondary/30">
-                                <img src={imagePreview} className="w-full h-full object-cover" />
-                                <button onClick={() => { setImagePreview(null); setSelectedImage(null); }} className="absolute top-2 right-2 bg-black/50 text-white rounded-full p-1"><X className="w-4 h-4" /></button>
-                            </div>
-                        )}
-                        <div className="border-t pt-4 flex justify-between items-center">
+
+                        <div className="p-4 border-t border-gray-50 flex items-center justify-between bg-gray-50/50 z-20">
                             <input type="file" accept="image/*" className="hidden" ref={fileInputRef} onChange={handleImageSelect} />
-                            <Button type="button" variant="ghost" size="icon" onClick={() => fileInputRef.current?.click()}><ImageIcon className="w-6 h-6 text-indigo-500" /></Button>
-                            <Button onClick={handleCreatePost} disabled={isPosting || (!newContent && !selectedImage)} className="rounded-xl bg-indigo-600 hover:bg-indigo-700">
-                                {isPosting ? <Loader2 className="animate-spin" /> : <Send className="w-5 h-5" />}
+                            <div className="flex gap-2">
+                                <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="icon"
+                                    onClick={() => fileInputRef.current?.click()}
+                                    className="text-indigo-600 bg-indigo-50 hover:bg-indigo-100 rounded-full"
+                                >
+                                    <ImageIcon className="w-5 h-5" />
+                                </Button>
+                            </div>
+                            <span className="text-xs text-gray-400 font-medium">{newContent.length}/280</span>
+                        </div>
+                    </DialogContent>
+                </Dialog>
+            </div>
+
+            <Sheet open={!!activePostForComments} onOpenChange={(open) => !open && setActivePostForComments(null)}>
+                <SheetContent side="bottom" className="h-[85vh] rounded-t-[2.5rem] p-0 flex flex-col bg-gray-50/90 backdrop-blur-xl border-gray-200">
+                    <div className="w-12 h-1.5 bg-gray-300 rounded-full mx-auto mt-4 mb-2 shrink-0" />
+                    <SheetHeader className="px-6 pb-4 border-b border-gray-200/50">
+                        <SheetTitle className="text-center text-gray-800">Comentários</SheetTitle>
+                    </SheetHeader>
+
+                    <div className="flex-1 overflow-y-auto px-5 py-4 space-y-6">
+                        {loadingComments ? (
+                            <div className="flex justify-center py-10"><Loader2 className="w-8 h-8 animate-spin text-indigo-400" /></div>
+                        ) : comments.length === 0 ? (
+                            <div className="text-center text-gray-400 py-10 text-sm">Nenhum comentário ainda.</div>
+                        ) : (
+                            comments.map(comment => (
+                                <div key={comment.id} className="flex gap-3 animate-in fade-in slide-in-from-bottom-2">
+                                    <Avatar className="w-8 h-8 mt-1 border border-white shadow-sm shrink-0">
+                                        <AvatarImage src={getSecureUrl(comment.profiles?.avatar_url || undefined)} />
+                                        <AvatarFallback className="text-[10px]">{comment.profiles?.display_name?.charAt(0)}</AvatarFallback>
+                                    </Avatar>
+                                    <div className="flex flex-col gap-1 max-w-[85%]">
+                                        <span className="text-xs font-bold text-gray-600 ml-1">{comment.profiles?.display_name}</span>
+                                        <div className="bg-white p-3 rounded-2xl rounded-tl-none shadow-sm border border-gray-100 text-sm text-gray-800 leading-relaxed">
+                                            {comment.content}
+                                        </div>
+                                    </div>
+                                </div>
+                            ))
+                        )}
+                    </div>
+
+                    <div className="p-4 bg-white border-t border-gray-100 pb-8 sm:pb-4 shrink-0">
+                        <div className="flex items-center gap-2 bg-gray-100 rounded-full p-1.5 pr-2 focus-within:ring-2 focus-within:ring-indigo-100 transition-all border border-transparent focus-within:border-indigo-200">
+                            <Avatar className="w-8 h-8 shrink-0">
+                                <AvatarImage src={getSecureUrl(user?.user_metadata?.avatar_url)} />
+                                <AvatarFallback className="text-[10px]">EU</AvatarFallback>
+                            </Avatar>
+                            <Input
+                                placeholder="Adicione um comentário..."
+                                value={newCommentText}
+                                onChange={(e) => setNewCommentText(e.target.value)}
+                                className="border-none shadow-none bg-transparent focus-visible:ring-0 text-sm h-9"
+                                onKeyDown={(e) => e.key === 'Enter' && sendComment()}
+                            />
+                            <Button
+                                size="icon"
+                                onClick={sendComment}
+                                disabled={!newCommentText.trim()}
+                                className={cn(
+                                    "rounded-full w-8 h-8 shrink-0 transition-all",
+                                    newCommentText.trim() ? "bg-indigo-600 hover:bg-indigo-700 text-white" : "bg-gray-200 text-gray-400"
+                                )}
+                            >
+                                <Send className="w-4 h-4" />
                             </Button>
                         </div>
-                    </div>
-                </DialogContent>
-            </Dialog>
-
-            {/* Sheet Comentários */}
-            <Sheet open={!!activePostForComments} onOpenChange={(open) => !open && setActivePostForComments(null)}>
-                <SheetContent side="bottom" className="h-[80vh] rounded-t-[2rem] p-0 flex flex-col">
-                    <SheetHeader className="p-6 border-b"><SheetTitle>Comentários</SheetTitle></SheetHeader>
-                    <div className="flex-1 overflow-y-auto p-6 space-y-4">
-                        {loadingComments ? <div className="flex justify-center"><Loader2 className="animate-spin text-primary" /></div> : comments.map(comment => (
-                            <div key={comment.id} className="flex gap-3">
-                                <Avatar className="w-8 h-8 mt-1">
-                                    <AvatarImage src={getSecureUrl(comment.profiles?.avatar_url || undefined)} />
-                                    <AvatarFallback>{comment.profiles?.display_name?.charAt(0)}</AvatarFallback>
-                                </Avatar>
-                                <div className="bg-secondary/30 p-3 rounded-2xl rounded-tl-none max-w-[85%]">
-                                    <p className="text-xs font-bold mb-1 opacity-70">{comment.profiles?.display_name}</p>
-                                    <p className="text-sm">{comment.content}</p>
-                                </div>
-                            </div>
-                        ))}
-                    </div>
-                    <div className="p-4 border-t bg-background flex gap-2">
-                        <Input placeholder="Escreva um comentário..." value={newCommentText} onChange={(e) => setNewCommentText(e.target.value)} className="rounded-full bg-secondary/50 border-none" />
-                        <Button size="icon" onClick={sendComment} disabled={!newCommentText.trim()} className="rounded-full w-10 h-10 shrink-0"><Send className="w-4 h-4" /></Button>
                     </div>
                 </SheetContent>
             </Sheet>
