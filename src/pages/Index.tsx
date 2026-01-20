@@ -1,7 +1,6 @@
 import { useState, useEffect } from "react";
 import { Plus, ShoppingBag, Loader2, ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { PageHeader } from "@/components/PageHeader";
 import { AppMenu } from "@/components/AppMenu";
 import { ListCard } from "@/components/ListCard";
 import { EmptyState } from "@/components/EmptyState";
@@ -53,6 +52,7 @@ export default function Index() {
 
     setLoading(true);
     try {
+      // 1. Busca todas as listas de uma vez
       const { data: listsData, error: listsError } = await supabase
         .from("shopping_lists")
         .select("*")
@@ -61,19 +61,34 @@ export default function Index() {
 
       if (listsError) throw listsError;
 
-      const listsWithCounts = await Promise.all(
-        (listsData || []).map(async (list) => {
-          const { count } = await supabase
-            .from("list_items")
-            .select("*", { count: "exact", head: true })
-            .eq("list_id", list.id);
+      if (!listsData || listsData.length === 0) {
+        setLists([]);
+        setLoading(false);
+        return;
+      }
 
-          return {
-            ...list,
-            item_count: count || 0,
-          };
-        })
-      );
+      // 2. OTIMIZAÇÃO DE PERFORMANCE (Batch Request)
+      // Em vez de chamar o banco N vezes, pegamos todos os IDs e buscamos os itens em 1 chamada.
+      const listIds = listsData.map((l) => l.id);
+
+      const { data: allItems, error: itemsError } = await supabase
+        .from("list_items")
+        .select("list_id")
+        .in("list_id", listIds);
+
+      if (itemsError) throw itemsError;
+
+      // 3. Agregação em Memória (Instantâneo)
+      // Cria um mapa de contagem: { 'list_id_1': 5, 'list_id_2': 10 }
+      const counts: Record<string, number> = {};
+      allItems?.forEach((item) => {
+        counts[item.list_id] = (counts[item.list_id] || 0) + 1;
+      });
+
+      const listsWithCounts = listsData.map((list) => ({
+        ...list,
+        item_count: counts[list.id] || 0,
+      }));
 
       setLists(listsWithCounts);
     } catch (error) {
@@ -107,7 +122,10 @@ export default function Index() {
 
       setNewListName("");
       setDialogOpen(false);
-      fetchLists();
+
+      // Navega direto para a nova lista para inserir produtos
+      navigate(`/lista/${data.id}`);
+
     } catch (error) {
       console.error("Error creating list:", error);
       toast({
@@ -134,13 +152,12 @@ export default function Index() {
 
   return (
     <div className="min-h-screen bg-background pb-20">
-      {/* Header Atualizado com Botão Voltar */}
       <div className="flex items-center justify-between px-4 py-4 max-w-md mx-auto sticky top-0 z-30 bg-background/90 backdrop-blur-md border-b border-border">
         <div className="flex items-center gap-3">
           <Button
             variant="ghost"
             size="icon"
-            onClick={() => navigate("/")} // Volta para a Gamificação (Home)
+            onClick={() => navigate("/")}
             className="-ml-2"
           >
             <ArrowLeft className="w-5 h-5 text-muted-foreground" />

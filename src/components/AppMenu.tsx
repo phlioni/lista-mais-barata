@@ -14,7 +14,7 @@ export function AppMenu({ triggerClassName }: AppMenuProps) {
     const { signOut } = useAuth();
 
     const menuItems = [
-        { path: "/", icon: Trophy, label: "Desafio Mensal" },
+        { path: "/", icon: Trophy, label: "Home" },
         { path: "/listas", icon: ShoppingCart, label: "Minhas Listas" },
         { path: "/comunidade", icon: Users, label: "Comunidade" },
         { path: "/mercados", icon: MapPin, label: "Mercados" },

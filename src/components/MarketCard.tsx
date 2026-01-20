@@ -11,10 +11,11 @@ interface MarketCardProps {
   totalPrice: number;
   distance: number;
   missingItems: number;
-  substitutedItems?: number; // Novo campo opcional
+  substitutedItems?: number;
   rank: number;
   isRecommended: boolean;
   lastUpdate: string;
+  strategy?: 'cheapest' | 'best_brands'; // Nova prop opcional
 }
 
 export function MarketCard({
@@ -28,13 +29,15 @@ export function MarketCard({
   substitutedItems = 0,
   rank,
   isRecommended,
-  lastUpdate
+  lastUpdate,
+  strategy = 'cheapest' // Valor padrão
 }: MarketCardProps) {
   const navigate = useNavigate();
 
-  // Função para navegar usando a rota que funciona no seu projeto
+  // Função para navegar passando a estratégia na URL
   const handleViewDetails = () => {
-    navigate(`/mercado/${id}/${listId}?distance=${distance}&total=${totalPrice}`);
+    // Adicionei &strategy=${strategy} na URL
+    navigate(`/lista/${listId}?marketId=${id}&usePrices=true&strategy=${strategy}`);
   };
 
   // Formata a data para dd/mm/aaaa
@@ -103,11 +106,12 @@ export function MarketCard({
         {/* ÁREA DE ALERTAS INTELIGENTES */}
         <div className="space-y-2 mb-4">
 
-          {/* Alerta de Substituição Inteligente (Novidade) */}
+          {/* Alerta de Substituição Inteligente */}
           {substitutedItems > 0 && (
             <div className="flex items-center gap-2 bg-indigo-50 text-indigo-700 border border-indigo-100 px-3 py-2 rounded-lg text-xs font-medium">
               <Sparkles className="w-4 h-4 shrink-0 fill-indigo-200" />
-              {substitutedItems} {substitutedItems === 1 ? "item otimizado" : "itens otimizados"} com marcas mais baratas
+              {substitutedItems} {substitutedItems === 1 ? "item otimizado" : "itens otimizados"}
+              {strategy === 'cheapest' ? ' (menor preço)' : ' (melhor marca)'}
             </div>
           )}
 
@@ -128,7 +132,7 @@ export function MarketCard({
             <span>Atualizado em {formattedDate}</span>
           </div>
 
-          {/* Botão usando onClick para garantir a navegação correta */}
+          {/* Botão de Ação */}
           <Button
             onClick={handleViewDetails}
             size="sm"
