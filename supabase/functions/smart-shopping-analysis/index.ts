@@ -19,6 +19,21 @@ function calculateDistance(lat1: number, lon1: number, lat2: number, lon2: numbe
   return R * c;
 }
 
+// Lista de palavras que mudam drasticamente a categoria do produto
+// Se o usuário não pediu isso, NÃO devemos trazer produtos que tenham isso.
+const PROCESSED_KEYWORDS = [
+  "congelad", "congelada", "congelado",
+  "frita", "frito", "pré-frita", "pre-frita",
+  "empanad", "empanado", "empanada",
+  "pronto", "pronta", "nuggets", "hamburguer",
+  "lasanha", "pizza"
+];
+
+function containsProcessedKeyword(text: string): boolean {
+  const lower = text.toLowerCase();
+  return PROCESSED_KEYWORDS.some(k => lower.includes(k));
+}
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
 
@@ -28,7 +43,7 @@ serve(async (req) => {
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
     );
 
-    const { listId, userLocation, radius, targetMarketId } = await req.json();
+    const { listId, userLocation, radius, targetMarketId, strategy } = await req.json();
 
     if (!listId) throw new Error("ID da lista obrigatório");
 
@@ -48,7 +63,6 @@ serve(async (req) => {
     let marketsToAnalyze = [];
 
     if (targetMarketId) {
-      // Modo Detalhe: Analisa apenas um mercado específico (ignora raio)
       const { data: market, error: mError } = await supabase
         .from("markets")
         .select("*")
@@ -57,7 +71,6 @@ serve(async (req) => {
       if (mError) throw mError;
       marketsToAnalyze = [market];
     } else {
-      // Modo Comparação Geral: Usa raio
       if (!userLocation) throw new Error("Localização necessária para busca por raio");
 
       const { data: allMarkets, error: marketsError } = await supabase
@@ -101,7 +114,8 @@ serve(async (req) => {
       const marketProductsSearch = new Fuse(marketPrices, {
         keys: ["products.name"],
         threshold: 0.3,
-        includeScore: true
+        includeScore: true,
+        ignoreLocation: true
       });
 
       let totalPrice = 0;
@@ -115,41 +129,89 @@ serve(async (req) => {
         const targetName = item.products.name;
         const targetBrand = item.products.brand?.toLowerCase().trim();
 
+        // Verifica se o item original é "processado"
+        const isTargetProcessed = containsProcessedKeyword(targetName);
+
         let match = null;
         let isSubstitution = false;
         let matchType = 'missing';
 
-        // A. Match Exato
+        // Busca todos os candidatos
+        const searchResult = marketProductsSearch.search(targetName);
+
+        let candidatesWithScore = searchResult
+          .filter(res => res.score !== undefined && res.score < 0.45)
+          .map(res => ({ item: res.item, score: res.score || 0 }));
+
         const exactMatch = marketPrices.find(p => p.product_id === targetId);
-
         if (exactMatch) {
-          match = exactMatch;
-          matchType = 'exact';
-        } else {
-          // B. Match Inteligente
-          const searchResult = marketProductsSearch.search(targetName);
-          const candidates = searchResult
-            .filter(res => res.score !== undefined && res.score < 0.4)
-            .map(res => res.item);
+          const exists = candidatesWithScore.find(c => c.item.product_id === exactMatch.product_id);
+          if (!exists) {
+            candidatesWithScore.push({ item: exactMatch, score: 0 });
+          } else {
+            exists.score = 0;
+          }
+        }
 
-          if (candidates.length > 0) {
+        // --- FILTRO DE SEGURANÇA (Batata vs Batata Congelada) ---
+        // Se eu pedi "Batata" (não processado) e o candidato é "Batata Congelada" (processado), REMOVE o candidato.
+        if (!isTargetProcessed) {
+          candidatesWithScore = candidatesWithScore.filter(c => {
+            const isCandidateProcessed = containsProcessedKeyword(c.item.products.name);
+            // Se o candidato é processado mas o alvo não era, descarta.
+            return !isCandidateProcessed;
+          });
+        }
+
+        if (candidatesWithScore.length > 0) {
+
+          if (strategy === 'cheapest') {
+            // ESTRATÉGIA: MENOR PREÇO
+            candidatesWithScore.sort((a, b) => a.item.price - b.item.price);
+            match = candidatesWithScore[0].item;
+
+            if (!exactMatch || match.product_id !== exactMatch.product_id) {
+              isSubstitution = true;
+              matchType = 'cheapest_strategy';
+            } else {
+              matchType = 'exact_cheapest';
+            }
+
+          } else {
+            // ESTRATÉGIA: MELHORES MARCAS
+
+            // 1. Melhor score de texto
+            const bestScore = Math.min(...candidatesWithScore.map(c => c.score));
+
+            // 2. Margem de tolerância para relevância (agora mais rígida para evitar desvios)
+            const tolerance = 0.1;
+
+            // Filtra apenas os que são linguisticamente muito próximos
+            const relevantCandidates = candidatesWithScore.filter(c => c.score <= (bestScore + tolerance));
+
+            // 3. Priorização
             if (targetBrand) {
-              const brandMatch = candidates.find(c =>
-                c.products.brand?.toLowerCase().trim().includes(targetBrand)
+              const brandMatch = relevantCandidates.find(c =>
+                c.item.products.brand?.toLowerCase().trim().includes(targetBrand)
               );
               if (brandMatch) {
-                match = brandMatch;
+                match = brandMatch.item;
                 matchType = 'brand_variant';
-              } else {
-                candidates.sort((a, b) => a.price - b.price);
-                match = candidates[0];
                 isSubstitution = true;
-                matchType = 'cheapest_sub';
               }
-            } else {
-              candidates.sort((a, b) => a.price - b.price);
-              match = candidates[0];
-              matchType = 'generic_best';
+            }
+
+            if (!match && relevantCandidates.length > 0) {
+              // Ordena pelo MAIOR preço entre os RELEVANTES
+              relevantCandidates.sort((a, b) => b.item.price - a.item.price);
+              match = relevantCandidates[0].item;
+
+              if (!exactMatch || match.product_id !== exactMatch.product_id) {
+                isSubstitution = true;
+                matchType = 'best_brand_strategy';
+              } else {
+                matchType = 'exact_premium';
+              }
             }
           }
         }
@@ -203,11 +265,9 @@ serve(async (req) => {
       };
     });
 
-    // FILTRAGEM E ORDENAÇÃO (CORREÇÃO APLICADA AQUI)
     let finalResults = results;
 
     if (!targetMarketId) {
-      // Remove mercados zerados ou sem itens na busca geral
       finalResults = results.filter(m => m.totalPrice > 0 && m.coveragePercent > 0);
 
       finalResults.sort((a, b) => {

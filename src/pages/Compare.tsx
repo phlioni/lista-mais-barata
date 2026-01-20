@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { ArrowLeft, MapPin, Loader2, Sparkles, RefreshCw } from "lucide-react";
+import { ArrowLeft, MapPin, Loader2, Sparkles, RefreshCw, BadgePercent, Star } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { RadiusSelector } from "@/components/RadiusSelector";
 import { MarketCard } from "@/components/MarketCard";
@@ -9,6 +9,7 @@ import { AppMenu } from "@/components/AppMenu";
 import { useAuth } from "@/hooks/useAuth";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
+import { cn } from "@/lib/utils";
 
 interface MarketResult {
   id: string;
@@ -17,7 +18,7 @@ interface MarketResult {
   totalPrice: number;
   distance: number;
   missingItems: number;
-  substitutedItems: number; // NOVO CAMPO
+  substitutedItems: number;
   totalItems: number;
   coveragePercent: number;
   realCost: number;
@@ -33,6 +34,8 @@ export default function Compare() {
 
   const [listName, setListName] = useState("");
   const [radius, setRadius] = useState(5);
+  const [strategy, setStrategy] = useState<'cheapest' | 'best_brands'>('cheapest');
+
   const [loading, setLoading] = useState(false);
   const [results, setResults] = useState<MarketResult[]>([]);
   const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null);
@@ -50,24 +53,21 @@ export default function Compare() {
     }
   }, [id]);
 
-  // RESTAURAÇÃO DE ESTADO (Cache da Busca)
   useEffect(() => {
-    // Tenta recuperar do cache ao montar a tela
     const cachedData = sessionStorage.getItem(`compare-cache-${id}`);
     if (cachedData) {
       try {
         const parsed = JSON.parse(cachedData);
         setResults(parsed.results);
         setRadius(parsed.radius);
+        if (parsed.strategy) setStrategy(parsed.strategy);
         setHasSearched(true);
-        // Se tiver localização salva, usa também, senão tenta pegar de novo
         if (parsed.userLocation) setUserLocation(parsed.userLocation);
       } catch (e) {
         console.error("Erro ao restaurar cache", e);
       }
     }
 
-    // Geolocalização (se não tiver no cache ou para atualizar)
     if (navigator.geolocation) {
       navigator.geolocation.getCurrentPosition(
         (position) => {
@@ -86,18 +86,18 @@ export default function Compare() {
     }
   }, [id]);
 
-  // SALVAR NO CACHE
   useEffect(() => {
     if (hasSearched && results.length > 0 && id) {
       const cacheData = {
         results,
         radius,
+        strategy,
         userLocation,
         timestamp: Date.now()
       };
       sessionStorage.setItem(`compare-cache-${id}`, JSON.stringify(cacheData));
     }
-  }, [results, radius, userLocation, hasSearched, id]);
+  }, [results, radius, strategy, userLocation, hasSearched, id]);
 
   const fetchListName = async () => {
     if (!id) return;
@@ -115,7 +115,6 @@ export default function Compare() {
   };
 
   const handleNewSearch = () => {
-    // Limpa cache explicitamente se o usuário quiser nova busca
     sessionStorage.removeItem(`compare-cache-${id}`);
     compareMarkets();
   };
@@ -131,7 +130,8 @@ export default function Compare() {
         body: {
           listId: id,
           userLocation: userLocation,
-          radius: radius
+          radius: radius,
+          strategy: strategy
         }
       });
 
@@ -196,6 +196,34 @@ export default function Compare() {
           </span>
         </div>
 
+        {/* CONTROLE DE ESTRATÉGIA */}
+        <div className="bg-secondary/30 p-1 rounded-xl flex gap-1 mb-6">
+          <button
+            onClick={() => setStrategy('cheapest')}
+            className={cn(
+              "flex-1 py-2.5 text-sm font-medium rounded-lg flex items-center justify-center gap-2 transition-all",
+              strategy === 'cheapest'
+                ? "bg-background text-emerald-600 shadow-sm ring-1 ring-border"
+                : "text-muted-foreground hover:text-foreground"
+            )}
+          >
+            <BadgePercent className="w-4 h-4" />
+            Menor Preço
+          </button>
+          <button
+            onClick={() => setStrategy('best_brands')}
+            className={cn(
+              "flex-1 py-2.5 text-sm font-medium rounded-lg flex items-center justify-center gap-2 transition-all",
+              strategy === 'best_brands'
+                ? "bg-background text-indigo-600 shadow-sm ring-1 ring-border"
+                : "text-muted-foreground hover:text-foreground"
+            )}
+          >
+            <Star className="w-4 h-4" />
+            Melhores Marcas
+          </button>
+        </div>
+
         <div className="mb-6">
           <p className="text-sm font-medium text-foreground mb-2">Raio de Busca:</p>
           <RadiusSelector value={radius} onChange={setRadius} />
@@ -212,7 +240,7 @@ export default function Compare() {
           ) : (
             <>
               {hasSearched ? <RefreshCw className="w-5 h-5 mr-2" /> : <Sparkles className="w-5 h-5 mr-2" />}
-              {hasSearched ? "Atualizar Busca" : "Buscar Melhores Preços"}
+              {hasSearched ? "Atualizar Busca" : "Buscar Opções"}
             </>
           )}
         </Button>
@@ -231,7 +259,9 @@ export default function Compare() {
                   <p className="text-sm font-medium text-foreground">
                     {results.length} {results.length === 1 ? "mercado encontrado" : "mercados encontrados"}
                   </p>
-                  <span className="text-xs text-muted-foreground">Ordenado por melhor opção</span>
+                  <span className="text-xs text-muted-foreground">
+                    {strategy === 'cheapest' ? "Foco em economia" : "Foco em marcas"}
+                  </span>
                 </div>
 
                 {results.map((result, index) => (
@@ -244,10 +274,11 @@ export default function Compare() {
                     totalPrice={result.totalPrice}
                     distance={result.distance}
                     missingItems={result.missingItems}
-                    substitutedItems={result.substitutedItems} // PASSANDO A NOVA PROPRIEDADE
+                    substitutedItems={result.substitutedItems}
                     rank={index + 1}
                     isRecommended={result.isRecommended}
                     lastUpdate={result.lastUpdate}
+                    strategy={strategy} // Passa a estratégia para o card
                   />
                 ))}
               </div>

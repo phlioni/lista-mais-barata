@@ -1,7 +1,6 @@
 import { useState, useEffect } from "react";
 import { Plus, ShoppingBag, Loader2, ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { PageHeader } from "@/components/PageHeader";
 import { AppMenu } from "@/components/AppMenu";
 import { ListCard } from "@/components/ListCard";
 import { EmptyState } from "@/components/EmptyState";
@@ -107,7 +106,10 @@ export default function Index() {
 
       setNewListName("");
       setDialogOpen(false);
-      fetchLists();
+
+      // MUDANÇA: Navega diretamente para a lista criada
+      navigate(`/lista/${data.id}`);
+
     } catch (error) {
       console.error("Error creating list:", error);
       toast({
