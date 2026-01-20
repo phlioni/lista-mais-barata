@@ -17,7 +17,6 @@ import { formatDistanceToNow } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import { cn } from "@/lib/utils";
 
-// ... (Interfaces Post, Comment, MarketSimple mantidas iguais ao anterior) ...
 interface Post {
     id: string;
     content: string;
@@ -100,7 +99,7 @@ export default function Community() {
         } else setLoading(false);
     }, []);
 
-    // 2. Fetch Posts (Usando a nova função otimizada)
+    // 2. Fetch Posts
     useEffect(() => {
         if (location) fetchPosts();
     }, [location]);
@@ -110,22 +109,32 @@ export default function Community() {
             const { data, error } = await supabase.rpc('get_posts_in_radius', {
                 user_lat: location!.lat,
                 user_long: location!.lng,
-                radius_km: 25
+                radius_km: 25 // 25km de raio
             });
             if (error) throw error;
             setPosts(data || []);
-        } catch (error) { console.error(error); }
-        finally { setLoading(false); }
+        } catch (error) {
+            console.error(error);
+        } finally {
+            setLoading(false);
+        }
     };
 
-    // ... (Funções handleTextChange, searchMarkets, selectMarketMention, handleImageSelect, handleCreatePost mantidas iguais) ...
     const handleTextChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
         const value = e.target.value;
         setNewContent(value);
-        const lastWord = value.split(/\s+/).pop();
-        if (lastWord && lastWord.startsWith('@') && lastWord.length > 1) {
-            setMentionQuery(lastWord.substring(1));
-            searchMarkets(lastWord.substring(1));
+
+        // Detecta @ para menção
+        // Pega a palavra atual sendo digitada
+        const cursorPosition = e.target.selectionStart;
+        const textBeforeCursor = value.substring(0, cursorPosition);
+        const words = textBeforeCursor.split(/\s+/);
+        const currentWord = words[words.length - 1];
+
+        if (currentWord && currentWord.startsWith('@') && currentWord.length > 1) {
+            const query = currentWord.substring(1);
+            setMentionQuery(query);
+            searchMarkets(query);
         } else {
             setMentionQuery(null);
             setMarketSuggestions([]);
@@ -138,14 +147,23 @@ export default function Community() {
     };
 
     const selectMarketMention = (market: MarketSimple) => {
-        const words = newContent.split(/\s+/);
-        words.pop();
-        setNewContent(`${words.join(" ")} @${market.name} `);
+        // Substitui a palavra atual (@query) pelo nome do mercado
+        const cursorPosition = (document.getElementById('post-textarea') as HTMLTextAreaElement)?.selectionStart || newContent.length;
+        const textBeforeCursor = newContent.substring(0, cursorPosition);
+        const textAfterCursor = newContent.substring(cursorPosition);
+
+        const words = textBeforeCursor.split(/\s+/);
+        words.pop(); // Remove o termo de busca incompleto
+
+        const newText = `${words.join(" ")} @${market.name} ${textAfterCursor}`;
+
+        setNewContent(newText);
         setLinkedMarket(market);
         setMentionQuery(null);
         setMarketSuggestions([]);
     };
 
+    // --- FUNÇÃO RESTAURADA ---
     const handleImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
         if (file) {
@@ -156,6 +174,7 @@ export default function Community() {
             reader.readAsDataURL(file);
         }
     };
+    // -------------------------
 
     const handleCreatePost = async () => {
         if (!newContent.trim() && !selectedImage) return;
@@ -166,9 +185,10 @@ export default function Community() {
                 const fileExt = selectedImage.name.split('.').pop();
                 const fileName = `${user!.id}/${Date.now()}.${fileExt}`;
                 const { error: uploadError } = await supabase.storage.from('post-images').upload(fileName, selectedImage);
-                if (uploadError) throw uploadError;
-                const { data } = supabase.storage.from('post-images').getPublicUrl(fileName);
-                finalImageUrl = data.publicUrl;
+                if (!uploadError) {
+                    const { data } = supabase.storage.from('post-images').getPublicUrl(fileName);
+                    finalImageUrl = data.publicUrl;
+                }
             }
             const { error } = await supabase.from('posts').insert({
                 user_id: user!.id, content: newContent, market_id: linkedMarket?.id, image_url: finalImageUrl,
@@ -208,16 +228,22 @@ export default function Community() {
         if (!newCommentText.trim() || !activePostForComments) return;
         const fakeId = Math.random().toString();
         const tempComment = { id: fakeId, content: newCommentText, created_at: new Date().toISOString(), user_id: user!.id, profiles: { display_name: "Você", avatar_url: null } };
+
         setComments([...comments, tempComment]);
         setNewCommentText("");
+
         const { error } = await supabase.from('post_comments').insert({ post_id: activePostForComments.id, user_id: user!.id, content: tempComment.content });
-        if (error) setComments(comments.filter(c => c.id !== fakeId));
-        else setPosts(posts.map(p => p.id === activePostForComments.id ? { ...p, comments_count: p.comments_count + 1 } : p));
+        if (error) {
+            setComments(comments.filter(c => c.id !== fakeId));
+            toast({ title: "Erro ao comentar", variant: "destructive" });
+        } else {
+            setPosts(posts.map(p => p.id === activePostForComments.id ? { ...p, comments_count: p.comments_count + 1 } : p));
+        }
     };
 
     return (
         <div className="min-h-screen bg-background/50 pb-24">
-            {/* Header com Botão Voltar */}
+            {/* Header */}
             <div className="bg-background/80 backdrop-blur-md px-4 py-4 sticky top-0 z-20 border-b border-border/40 flex justify-between items-center">
                 <div className="flex items-center gap-3">
                     <Button variant="ghost" size="icon" onClick={() => navigate(-1)} className="-ml-2">
@@ -231,7 +257,7 @@ export default function Community() {
                 <AppMenu triggerClassName="text-foreground/80 hover:bg-secondary/50 p-2 rounded-full" />
             </div>
 
-            {/* Feed Otimizado */}
+            {/* Feed */}
             <main className="px-4 pt-4 space-y-6 max-w-lg mx-auto">
                 {loading ? (
                     <div className="flex justify-center pt-20"><Loader2 className="w-8 h-8 animate-spin text-primary" /></div>
@@ -285,29 +311,33 @@ export default function Community() {
                 )}
             </main>
 
-            {/* FAB */}
+            {/* FAB (Botão de Criar Post) */}
             <Dialog open={isCreateOpen} onOpenChange={setIsCreateOpen}>
                 <DialogTrigger asChild>
                     <Button className="fixed bottom-24 right-5 h-16 w-16 rounded-full shadow-2xl bg-gradient-to-tr from-indigo-500 to-pink-500 hover:scale-105 transition-transform text-white z-40">
                         <Plus className="w-8 h-8" strokeWidth={2.5} />
                     </Button>
                 </DialogTrigger>
-                <DialogContent className="w-[95%] max-w-md rounded-[2rem] top-[10%] translate-y-0 p-0 overflow-hidden bg-background/95 backdrop-blur-xl border-white/20">
+                {/* Removido overflow-hidden para permitir que a lista de sugestões saia se necessário */}
+                <DialogContent className="w-[95%] max-w-md rounded-[2rem] top-[10%] translate-y-0 p-0 bg-background/95 backdrop-blur-xl border-white/20">
                     <DialogHeader className="px-6 pt-6 pb-2"><DialogTitle>Nova Publicação</DialogTitle></DialogHeader>
                     <div className="space-y-4 p-6 pt-2">
                         <div className="relative">
                             <Textarea
+                                id="post-textarea"
                                 placeholder="Use @ para marcar um mercado..."
                                 value={newContent}
                                 onChange={handleTextChange}
                                 className="min-h-[120px] text-base bg-transparent border-none focus-visible:ring-0 resize-none p-0"
                             />
+
+                            {/* LISTA DE SUGESTÕES (Abaixo do Texto - top-full) */}
                             {mentionQuery !== null && marketSuggestions.length > 0 && (
-                                <div className="absolute bottom-0 left-0 w-full bg-popover border rounded-xl shadow-lg z-50 overflow-hidden">
+                                <div className="absolute top-full left-0 w-full mt-2 bg-popover border rounded-xl shadow-xl z-50 overflow-hidden max-h-48 overflow-y-auto animate-in fade-in slide-in-from-top-2">
                                     {marketSuggestions.map(m => (
-                                        <div key={m.id} onClick={() => selectMarketMention(m)} className="p-3 hover:bg-muted cursor-pointer text-sm border-b last:border-none">
-                                            <p className="font-bold text-indigo-600">@{m.name}</p>
-                                            <p className="text-xs text-muted-foreground truncate">{m.address}</p>
+                                        <div key={m.id} onClick={() => selectMarketMention(m)} className="p-3 hover:bg-muted cursor-pointer text-sm border-b last:border-none flex flex-col">
+                                            <span className="font-bold text-indigo-600">@{m.name}</span>
+                                            <span className="text-xs text-muted-foreground truncate">{m.address}</span>
                                         </div>
                                     ))}
                                 </div>
