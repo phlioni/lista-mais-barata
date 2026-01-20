@@ -208,6 +208,16 @@ export default function ListDetail() {
       recognitionRef.current = new SpeechRecognition();
       recognitionRef.current.continuous = false;
       recognitionRef.current.lang = "pt-BR";
+
+      // Adicionado: Handler para quando o reconhecimento inicia
+      recognitionRef.current.onstart = () => {
+        setIsListening(true);
+        toast({
+          title: "Ouvindo...",
+          className: "bg-red-500 text-white border-none duration-2000"
+        });
+      };
+
       recognitionRef.current.onresult = (event: any) => {
         const transcript = event.results[0][0].transcript;
         setChatInput((prev) => (prev ? `${prev}, ${transcript}` : transcript));
@@ -692,7 +702,7 @@ export default function ListDetail() {
             <div className="flex gap-2 items-center mb-3">
               <Button variant={isListening ? "destructive" : "secondary"} size="icon" className={cn("h-12 w-12 rounded-full shrink-0 shadow-sm", isListening && "animate-pulse")} onClick={toggleListening}>{isListening ? <StopCircle className="w-6 h-6" /> : <Mic className="w-6 h-6" />}</Button>
               <div className="flex-1 relative">
-                <Input placeholder={isListening ? "Ouvindo..." : "Adicionar..."} value={chatInput} onChange={(e) => setChatInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()} className="h-12 rounded-full pl-5 pr-12 bg-secondary/20" disabled={isProcessingChat} />
+                <Input placeholder={isListening ? "Ouvindo..." : "Ex: Arroz, Feijão, Leite..."} value={chatInput} onChange={(e) => setChatInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()} className="h-12 rounded-full pl-5 pr-12 bg-secondary/20" disabled={isProcessingChat} />
                 <Button size="icon" className="absolute right-1 top-1/2 -translate-y-1/2 h-10 w-10 rounded-full" onClick={handleSendMessage} disabled={!chatInput.trim() || isProcessingChat}>{isProcessingChat ? <Loader2 className="w-5 h-5 animate-spin" /> : <Send className="w-5 h-5" />}</Button>
               </div>
             </div>
