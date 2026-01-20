@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import {
-    MapPin, Heart, MessageCircle, Send, Loader2, Store, Plus, Image as ImageIcon, X, ArrowLeft, MoreHorizontal, CornerDownRight, Search, Trash2, Flag, AlertTriangle
+    MapPin, Heart, MessageCircle, Send, Loader2, Store, Plus, Image as ImageIcon, X, ArrowLeft, MoreHorizontal, CornerDownRight, Search, Trash2, Flag
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -24,7 +24,6 @@ import {
     DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 
-// Interfaces
 interface Post {
     id: string;
     content: string;
@@ -96,7 +95,6 @@ export default function Community() {
     const [newCommentText, setNewCommentText] = useState("");
     const [loadingComments, setLoadingComments] = useState(false);
 
-    // 1. GPS
     useEffect(() => {
         const cachedLoc = sessionStorage.getItem('user_location');
         if (cachedLoc) {
@@ -121,7 +119,6 @@ export default function Community() {
         } else setLoading(false);
     }, []);
 
-    // 2. Fetch Posts
     const fetchPosts = useCallback(async () => {
         if (!location) return;
         try {
@@ -172,7 +169,7 @@ export default function Community() {
             const { data } = await supabase.from('markets')
                 .select('id, name, address')
                 .ilike('name', `%${query}%`)
-                .limit(50); // Limite alto para garantir resultados
+                .limit(50);
 
             setMarketSuggestions(data || []);
             setIsSearchingMarkets(false);
@@ -305,7 +302,8 @@ export default function Community() {
 
     return (
         <div className="min-h-screen bg-gray-50 pb-24 font-sans">
-            <header className="fixed top-0 left-0 right-0 z-40 bg-white/80 backdrop-blur-md border-b border-gray-100 transition-all duration-300">
+            {/* Header Sticky */}
+            <header className="fixed top-0 left-0 right-0 z-40 bg-white/80 backdrop-blur-md border-b border-gray-100">
                 <div className="px-5 py-3 flex items-center justify-between">
                     <div className="flex items-center gap-3">
                         <Button variant="ghost" size="icon" onClick={() => navigate(-1)} className="rounded-full hover:bg-gray-100 -ml-2 text-gray-500">
@@ -314,8 +312,8 @@ export default function Community() {
                         <div>
                             <h1 className="text-lg font-bold text-gray-900 tracking-tight">Comunidade</h1>
                             {location && (
-                                <p className="text-xs text-indigo-600 font-medium flex items-center gap-1 animate-pulse">
-                                    <MapPin className="w-3 h-3 fill-indigo-600" /> Explorando ofertas próximas
+                                <p className="text-xs text-indigo-600 font-medium flex items-center gap-1">
+                                    <MapPin className="w-3 h-3 fill-indigo-600" /> Explorando ofertas
                                 </p>
                             )}
                         </div>
@@ -336,13 +334,13 @@ export default function Community() {
                             <MessageCircle className="w-8 h-8 text-indigo-400" />
                         </div>
                         <h3 className="text-gray-900 font-bold mb-1">Tudo quieto por aqui</h3>
-                        <p className="text-gray-500 text-sm">Seja o primeiro a compartilhar uma oferta ou dica na sua região!</p>
+                        <p className="text-gray-500 text-sm">Seja o primeiro a compartilhar uma oferta ou dica!</p>
                     </div>
                 ) : (
                     posts.map((post) => (
                         <Card key={post.id} className="border-none shadow-sm shadow-indigo-100 rounded-3xl overflow-hidden bg-white hover:shadow-md transition-shadow duration-300">
                             <div className="p-5 pb-3">
-                                {/* Header do Post */}
+                                {/* Post Header */}
                                 <div className="flex items-start justify-between mb-3">
                                     <div className="flex items-center gap-3">
                                         <Avatar className="w-10 h-10 border border-gray-100 cursor-pointer hover:opacity-80 transition-opacity">
@@ -370,7 +368,6 @@ export default function Community() {
                                         </div>
                                     </div>
 
-                                    {/* MENU 3 PONTOS */}
                                     <DropdownMenu>
                                         <DropdownMenuTrigger asChild>
                                             <Button variant="ghost" size="icon" className="h-8 w-8 text-gray-400 -mr-2 rounded-full hover:bg-gray-100 transition-colors focus-visible:ring-0">
@@ -408,7 +405,7 @@ export default function Community() {
                                 <div className="w-full bg-gray-50">
                                     <img
                                         src={post.image_url}
-                                        alt="Foto da oferta"
+                                        alt="Oferta"
                                         className="w-full h-auto object-cover max-h-[500px]"
                                         loading="lazy"
                                     />
@@ -416,43 +413,18 @@ export default function Community() {
                             )}
 
                             <div className="px-5 py-3 flex items-center gap-6">
-                                <button
-                                    onClick={() => handleLike(post)}
-                                    className="flex items-center gap-2 group focus:outline-none"
-                                >
-                                    <div className={cn(
-                                        "p-2 rounded-full transition-colors",
-                                        post.liked_by_me ? "bg-rose-50" : "group-hover:bg-gray-100"
-                                    )}>
-                                        <Heart
-                                            className={cn(
-                                                "w-6 h-6 transition-all duration-300",
-                                                post.liked_by_me ? "fill-rose-500 text-rose-500 scale-110" : "text-gray-500 group-hover:text-gray-700"
-                                            )}
-                                        />
+                                <button onClick={() => handleLike(post)} className="flex items-center gap-2 group focus:outline-none">
+                                    <div className={cn("p-2 rounded-full transition-colors", post.liked_by_me ? "bg-rose-50" : "group-hover:bg-gray-100")}>
+                                        <Heart className={cn("w-6 h-6 transition-all duration-300", post.liked_by_me ? "fill-rose-500 text-rose-500 scale-110" : "text-gray-500 group-hover:text-gray-700")} />
                                     </div>
-                                    {post.likes_count > 0 && (
-                                        <span className={cn(
-                                            "text-sm font-semibold",
-                                            post.liked_by_me ? "text-rose-600" : "text-gray-500"
-                                        )}>
-                                            {post.likes_count}
-                                        </span>
-                                    )}
+                                    {post.likes_count > 0 && <span className={cn("text-sm font-semibold", post.liked_by_me ? "text-rose-600" : "text-gray-500")}>{post.likes_count}</span>}
                                 </button>
 
-                                <button
-                                    onClick={() => openComments(post)}
-                                    className="flex items-center gap-2 group focus:outline-none"
-                                >
+                                <button onClick={() => openComments(post)} className="flex items-center gap-2 group focus:outline-none">
                                     <div className="p-2 rounded-full group-hover:bg-indigo-50 transition-colors">
                                         <MessageCircle className="w-6 h-6 text-gray-500 group-hover:text-indigo-600 transition-colors" />
                                     </div>
-                                    {post.comments_count > 0 && (
-                                        <span className="text-sm font-semibold text-gray-500 group-hover:text-indigo-600">
-                                            {post.comments_count}
-                                        </span>
-                                    )}
+                                    {post.comments_count > 0 && <span className="text-sm font-semibold text-gray-500 group-hover:text-indigo-600">{post.comments_count}</span>}
                                 </button>
                             </div>
                         </Card>
@@ -460,6 +432,7 @@ export default function Community() {
                 )}
             </main>
 
+            {/* CREATE POST - FULL SCREEN ON MOBILE */}
             <div className="fixed bottom-24 right-6 z-30">
                 <Dialog open={isCreateOpen} onOpenChange={setIsCreateOpen}>
                     <DialogTrigger asChild>
@@ -468,9 +441,15 @@ export default function Community() {
                         </Button>
                     </DialogTrigger>
 
-                    <DialogContent className="w-[95%] max-w-lg rounded-3xl p-0 gap-0 overflow-hidden bg-white sm:w-full border-none">
-                        <DialogHeader className="px-5 py-4 border-b border-gray-100 flex flex-row items-center justify-between space-y-0 bg-white z-20">
-                            <DialogTitle className="text-lg font-bold text-gray-900">Novo Post</DialogTitle>
+                    {/* Alteração crítica: h-full no mobile para evitar problemas com teclado */}
+                    <DialogContent className="w-full h-full max-w-none rounded-none sm:h-auto sm:max-w-lg sm:rounded-3xl p-0 gap-0 overflow-hidden bg-white border-none flex flex-col">
+                        <DialogHeader className="px-5 py-4 border-b border-gray-100 flex flex-row items-center justify-between space-y-0 bg-white z-20 shrink-0 safe-top">
+                            <div className="flex items-center gap-2">
+                                <Button variant="ghost" size="icon" onClick={() => setIsCreateOpen(false)} className="sm:hidden -ml-2">
+                                    <X className="w-6 h-6" />
+                                </Button>
+                                <DialogTitle className="text-lg font-bold text-gray-900">Novo Post</DialogTitle>
+                            </div>
                             <Button
                                 onClick={handleCreatePost}
                                 disabled={isPosting || (!newContent && !selectedImage)}
@@ -480,23 +459,24 @@ export default function Community() {
                             </Button>
                         </DialogHeader>
 
-                        <div className="p-5 flex flex-col gap-4 relative max-h-[60vh] overflow-y-auto">
+                        <div className="flex-1 p-5 flex flex-col gap-4 overflow-y-auto">
                             <div className="flex gap-3">
                                 <Avatar className="w-10 h-10 border border-gray-100 shrink-0">
                                     <AvatarImage src={getSecureUrl(user?.user_metadata?.avatar_url)} />
                                     <AvatarFallback className="bg-indigo-50 text-indigo-600 font-bold">EU</AvatarFallback>
                                 </Avatar>
 
-                                <div className="flex-1">
+                                <div className="flex-1 relative">
+                                    {/* text-base para evitar zoom no iPhone */}
                                     <Textarea
                                         id="post-textarea"
                                         placeholder="O que você encontrou de bom? Use @ para marcar um mercado."
                                         value={newContent}
                                         onChange={handleTextChange}
-                                        className="w-full min-h-[120px] text-lg leading-relaxed border-none focus-visible:ring-0 p-2 placeholder:text-gray-300 resize-none font-medium"
+                                        className="w-full min-h-[120px] text-base leading-relaxed border-none focus-visible:ring-0 p-2 placeholder:text-gray-400 resize-none font-medium bg-transparent"
                                     />
 
-                                    {/* LISTA DE SUGESTÕES (Corrigida: Estática abaixo do input) */}
+                                    {/* LISTA DE SUGESTÕES (Estática para não sobrepor) */}
                                     {mentionQuery !== null && (
                                         <div className="mt-2 w-full bg-white rounded-xl border border-indigo-100 shadow-lg overflow-hidden animate-in fade-in slide-in-from-top-2">
                                             <div className="bg-indigo-50/50 px-3 py-2 flex items-center justify-between border-b border-indigo-50">
@@ -514,7 +494,7 @@ export default function Community() {
                                                     >
                                                         <div className="flex flex-col">
                                                             <span className="font-bold text-sm text-gray-800 group-hover:text-indigo-700">{m.name}</span>
-                                                            <span className="text-xs text-gray-400 truncate max-w-[180px]">{m.address}</span>
+                                                            <span className="text-xs text-gray-400 truncate max-w-[200px]">{m.address}</span>
                                                         </div>
                                                         <Plus className="w-4 h-4 text-gray-300 group-hover:text-indigo-500" />
                                                     </div>
@@ -539,7 +519,7 @@ export default function Community() {
                             </div>
 
                             {imagePreview && (
-                                <div className="relative rounded-2xl overflow-hidden shadow-sm border border-gray-100 group mt-2">
+                                <div className="relative rounded-2xl overflow-hidden shadow-sm border border-gray-100 group mt-2 shrink-0">
                                     <img src={imagePreview} className="w-full max-h-[300px] object-cover" />
                                     <button
                                         onClick={() => { setImagePreview(null); setSelectedImage(null); }}
@@ -551,7 +531,8 @@ export default function Community() {
                             )}
                         </div>
 
-                        <div className="p-4 border-t border-gray-50 flex items-center justify-between bg-gray-50/50 z-20">
+                        {/* Footer Sticky no Mobile */}
+                        <div className="p-4 border-t border-gray-50 flex items-center justify-between bg-gray-50/50 shrink-0 pb-safe">
                             <input type="file" accept="image/*" className="hidden" ref={fileInputRef} onChange={handleImageSelect} />
                             <div className="flex gap-2">
                                 <Button
@@ -570,8 +551,9 @@ export default function Community() {
                 </Dialog>
             </div>
 
+            {/* Comments Sheet - Responsive Height */}
             <Sheet open={!!activePostForComments} onOpenChange={(open) => !open && setActivePostForComments(null)}>
-                <SheetContent side="bottom" className="h-[85vh] rounded-t-[2.5rem] p-0 flex flex-col bg-gray-50/90 backdrop-blur-xl border-gray-200">
+                <SheetContent side="bottom" className="h-[90dvh] sm:h-[85vh] rounded-t-[2.5rem] p-0 flex flex-col bg-gray-50/90 backdrop-blur-xl border-gray-200">
                     <div className="w-12 h-1.5 bg-gray-300 rounded-full mx-auto mt-4 mb-2 shrink-0" />
                     <SheetHeader className="px-6 pb-4 border-b border-gray-200/50">
                         <SheetTitle className="text-center text-gray-800">Comentários</SheetTitle>
@@ -600,17 +582,18 @@ export default function Community() {
                         )}
                     </div>
 
-                    <div className="p-4 bg-white border-t border-gray-100 pb-8 sm:pb-4 shrink-0">
+                    <div className="p-4 bg-white border-t border-gray-100 pb-safe sm:pb-4 shrink-0">
                         <div className="flex items-center gap-2 bg-gray-100 rounded-full p-1.5 pr-2 focus-within:ring-2 focus-within:ring-indigo-100 transition-all border border-transparent focus-within:border-indigo-200">
                             <Avatar className="w-8 h-8 shrink-0">
                                 <AvatarImage src={getSecureUrl(user?.user_metadata?.avatar_url)} />
                                 <AvatarFallback className="text-[10px]">EU</AvatarFallback>
                             </Avatar>
+                            {/* text-base para evitar zoom no input de comentário */}
                             <Input
                                 placeholder="Adicione um comentário..."
                                 value={newCommentText}
                                 onChange={(e) => setNewCommentText(e.target.value)}
-                                className="border-none shadow-none bg-transparent focus-visible:ring-0 text-sm h-9"
+                                className="border-none shadow-none bg-transparent focus-visible:ring-0 text-base h-9"
                                 onKeyDown={(e) => e.key === 'Enter' && sendComment()}
                             />
                             <Button
