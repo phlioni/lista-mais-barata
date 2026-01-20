@@ -8,15 +8,17 @@ interface ProductItemProps {
   id: string;
   name: string;
   brand?: string | null;
-  measurement?: string | null; // Novo campo
+  measurement?: string | null;
   quantity: number;
   isChecked: boolean;
   price?: number;
   showPriceInput?: boolean;
   readonly?: boolean;
+  isSimpleMode?: boolean; // Novo modo simplificado
   onToggleCheck: (id: string) => void;
   onUpdateQuantity: (id: string, quantity: number) => void;
   onUpdatePrice: (id: string, price: number) => void;
+  onUpdateBrand?: (id: string, brand: string) => void; // Edição de marca
   onRemove: (id: string) => void;
 }
 
@@ -30,9 +32,11 @@ export function ProductItem({
   price,
   showPriceInput = false,
   readonly = false,
+  isSimpleMode = false,
   onToggleCheck,
   onUpdateQuantity,
   onUpdatePrice,
+  onUpdateBrand,
   onRemove,
 }: ProductItemProps) {
 
@@ -64,9 +68,10 @@ export function ProductItem({
           : "bg-card border-border shadow-sm hover:border-primary/20 hover:shadow-md"
       )}
     >
-      {/* SEÇÃO SUPERIOR: Checkbox e Nome */}
+      {/* SEÇÃO SUPERIOR: Checkbox e Dados Principais */}
       <div className="flex items-start gap-3 w-full">
-        {!readonly && (
+        {/* Checkbox: Oculto no modo simples */}
+        {!readonly && !isSimpleMode && (
           <Checkbox
             checked={isChecked}
             onCheckedChange={() => onToggleCheck(id)}
@@ -85,30 +90,43 @@ export function ProductItem({
             {name}
           </p>
 
-          {/* Linha de Marca e Medida */}
-          <div className="flex items-center gap-2 mt-0.5 flex-wrap">
-            {brand && (
-              <p className="text-[11px] text-muted-foreground truncate font-medium">
-                {brand}
-              </p>
-            )}
+          {/* Linha de Marca e Medida: Oculta no modo simples */}
+          {!isSimpleMode && (
+            <div className="flex items-center gap-2 mt-1 flex-wrap">
+              {/* Se estiver no modo de compras (showPriceInput), mostra Input para Marca */}
+              {showPriceInput && onUpdateBrand ? (
+                <Input
+                  value={brand || ""}
+                  onChange={(e) => onUpdateBrand(id, e.target.value)}
+                  placeholder="Marca"
+                  className="h-6 w-28 text-[11px] px-2 py-0 bg-secondary/50 border-transparent focus:bg-background focus:border-primary rounded-md"
+                />
+              ) : (
+                brand && (
+                  <p className="text-[11px] text-muted-foreground truncate font-medium">
+                    {brand}
+                  </p>
+                )
+              )}
 
-            {measurement && (
-              <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-muted text-primary/80 border border-border/50">
-                {measurement}
-              </span>
-            )}
-          </div>
+              {measurement && (
+                <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-muted text-primary/80 border border-border/50">
+                  {measurement}
+                </span>
+              )}
+            </div>
+          )}
         </div>
       </div>
 
-      {/* SEÇÃO INFERIOR: Controles */}
+      {/* SEÇÃO INFERIOR: Controles (Preço, Quantidade, Lixeira) */}
       <div className={cn(
         "flex items-center gap-2",
         "justify-end w-full pl-8 sm:pl-0 sm:w-auto sm:justify-start"
       )}>
 
-        {showPriceInput && (
+        {/* Input de Preço: Apenas no modo compras */}
+        {showPriceInput && !isSimpleMode && (
           <div className="relative w-[100px] sm:w-[95px]">
             <span className="absolute left-2 top-1/2 -translate-y-1/2 text-xs text-muted-foreground font-medium pointer-events-none">
               R$
@@ -124,7 +142,8 @@ export function ProductItem({
           </div>
         )}
 
-        {!showPriceInput && price !== undefined && price > 0 && (
+        {/* Exibição de Preço Total (para itens já com preço ou modo leitura) */}
+        {!showPriceInput && price !== undefined && price > 0 && !isSimpleMode && (
           <div className="text-right px-1">
             <p className="text-sm font-bold text-emerald-600 whitespace-nowrap">
               R$ {(price * quantity).toFixed(2).replace('.', ',')}
@@ -137,7 +156,8 @@ export function ProductItem({
           </div>
         )}
 
-        {!readonly && (
+        {/* Controles de Quantidade: Ocultos no modo simples */}
+        {!readonly && !isSimpleMode && (
           <div className="flex items-center bg-secondary/30 rounded-lg border border-border/50 h-9 sm:h-8">
             <button
               onClick={() => quantity > 1 && onUpdateQuantity(id, quantity - 1)}
@@ -158,12 +178,14 @@ export function ProductItem({
           </div>
         )}
 
-        {readonly && !showPriceInput && !price && (
+        {/* Quantidade estática (badge) para modo leitura */}
+        {readonly && !showPriceInput && (!price || price <= 0) && (
           <span className="text-xs font-medium bg-secondary px-2 py-1 rounded-md text-muted-foreground whitespace-nowrap">
             {quantity} un
           </span>
         )}
 
+        {/* Lixeira: Sempre visível (se não for readonly) */}
         {!readonly && (
           <Button
             variant="ghost"

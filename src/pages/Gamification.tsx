@@ -16,7 +16,8 @@ import {
     Users,
     MessageCircle,
     ChevronRight,
-    Quote
+    Quote,
+    ShoppingBag
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -87,13 +88,20 @@ export default function Gamification() {
     const loadData = async () => {
         setLoading(true);
         try {
-            // 1. Ranking com Ordenação Explícita no Front (CORREÇÃO AQUI)
-            const { data: rankingData } = await supabase.rpc('get_monthly_leaderboard');
+            // Executa todas as promessas em paralelo para performance máxima
+            const [rankingRes, pointsRes, profileRes, postRes] = await Promise.all([
+                supabase.rpc('get_monthly_leaderboard'),
+                supabase.rpc('get_my_monthly_points'),
+                supabase.from('profiles').select('display_name, avatar_url').eq('id', user!.id).single(),
+                supabase.from('posts').select(`id, content, created_at, profiles (display_name, avatar_url)`).order('created_at', { ascending: false }).limit(1).maybeSingle()
+            ]);
 
+            // 1. Processamento do Ranking
+            const rankingData = rankingRes.data || [];
             // Garante a ordem correta (maior pontuação primeiro)
-            const sortedRanking = (rankingData || []).sort((a: LeaderboardItem, b: LeaderboardItem) => b.total_points - a.total_points);
+            const sortedRanking = rankingData.sort((a: LeaderboardItem, b: LeaderboardItem) => b.total_points - a.total_points);
 
-            // Recalcula o rank visual baseado na posição do array ordenado
+            // Recalcula o rank visual
             const rankingWithCorrectRank = sortedRanking.map((item: LeaderboardItem, index: number) => ({
                 ...item,
                 rank: index + 1
@@ -101,47 +109,35 @@ export default function Gamification() {
 
             setLeaderboard(rankingWithCorrectRank);
 
-            // 2. Pontos
-            const { data: pointsData } = await supabase.rpc('get_my_monthly_points');
-            setMyPoints(pointsData || 0);
+            // 2. Pontos e Rank Pessoal
+            const points = pointsRes.data || 0;
+            setMyPoints(points);
 
-            // 3. Perfil
-            const { data: profileData } = await supabase.from('profiles').select('display_name, avatar_url').eq('id', user!.id).single();
-            if (profileData) {
-                setMyProfile({ name: profileData.display_name || "Você", avatar: profileData.avatar_url });
-            }
-
-            // 4. Rank (CORREÇÃO AQUI: Usa o array ordenado para achar a posição)
             const meInLeaderboard = rankingWithCorrectRank.find((item: LeaderboardItem) => item.user_id === user!.id);
             if (meInLeaderboard) {
                 setMyRank(meInLeaderboard.rank);
-                // Opcional: Atualizar pontos com o dado do ranking para garantir consistência
-                setMyPoints(meInLeaderboard.total_points);
+                // Sincroniza pontos com o ranking para garantir consistência visual
+                if (meInLeaderboard.total_points > points) setMyPoints(meInLeaderboard.total_points);
             }
 
-            // 5. Último Post (Widget da Comunidade)
-            const { data: postData } = await supabase
-                .from('posts')
-                .select(`
-          id, content, created_at, 
-          profiles (display_name, avatar_url)
-        `)
-                .order('created_at', { ascending: false })
-                .limit(1)
-                .maybeSingle();
+            // 3. Perfil
+            if (profileRes.data) {
+                setMyProfile({ name: profileRes.data.display_name || "Você", avatar: profileRes.data.avatar_url });
+            }
 
-            if (postData) {
+            // 4. Último Post
+            if (postRes.data) {
                 setLatestPost({
-                    id: postData.id,
-                    content: postData.content,
-                    created_at: postData.created_at,
+                    id: postRes.data.id,
+                    content: postRes.data.content,
+                    created_at: postRes.data.created_at,
                     // @ts-ignore
-                    profiles: Array.isArray(postData.profiles) ? postData.profiles[0] : postData.profiles
+                    profiles: Array.isArray(postRes.data.profiles) ? postRes.data.profiles[0] : postRes.data.profiles
                 });
             }
 
         } catch (error) {
-            console.error("Erro ao carregar:", error);
+            console.error("Erro ao carregar dados:", error);
         } finally {
             setLoading(false);
         }
@@ -178,7 +174,6 @@ export default function Gamification() {
 
                 {/* 1. HERO CARD: O "Cartão de Crédito" do Jogador */}
                 <div className="relative overflow-hidden rounded-[2rem] bg-gradient-to-br from-[#4F46E5] to-[#7C3AED] p-6 text-white shadow-xl shadow-indigo-500/20">
-                    {/* Círculos decorativos */}
                     <div className="absolute top-0 right-0 -mr-8 -mt-8 w-32 h-32 rounded-full bg-white/10 blur-2xl" />
                     <div className="absolute bottom-0 left-0 -ml-8 -mb-8 w-24 h-24 rounded-full bg-pink-500/20 blur-2xl" />
 
@@ -227,7 +222,7 @@ export default function Gamification() {
                     </div>
                 </div>
 
-                {/* 2. WIDGET DA COMUNIDADE (Pulse) */}
+                {/* 2. WIDGET DA COMUNIDADE */}
                 <div
                     onClick={() => navigate('/comunidade')}
                     className="group relative bg-white border border-indigo-50 rounded-2xl p-4 shadow-sm hover:shadow-md transition-all cursor-pointer overflow-hidden"
@@ -277,7 +272,7 @@ export default function Gamification() {
                     )}
                 </div>
 
-                {/* 3. LEADERBOARD (Design Limpo e Horizontal) */}
+                {/* 3. LEADERBOARD */}
                 <div>
                     <div className="flex items-center justify-between mb-4">
                         <h2 className="text-lg font-bold text-gray-800 flex items-center gap-2">
@@ -287,7 +282,7 @@ export default function Gamification() {
                         <span className="text-xs text-muted-foreground">Atualizado agora</span>
                     </div>
 
-                    {/* PODIUM HORIZONTAL - Mais compacto */}
+                    {/* PODIUM HORIZONTAL */}
                     {topThree.length > 0 && (
                         <div className="grid grid-cols-3 gap-3 mb-6 items-end">
                             {/* 2º Lugar */}
@@ -303,7 +298,7 @@ export default function Gamification() {
                                 <p className="text-[10px] text-gray-500 font-medium">{topThree[1]?.total_points || 0}</p>
                             </div>
 
-                            {/* 1º Lugar (Destaque) */}
+                            {/* 1º Lugar */}
                             <div className="flex flex-col items-center relative -top-2">
                                 <Crown className="w-6 h-6 text-yellow-400 fill-yellow-400 animate-bounce mb-1" />
                                 <div className="relative mb-2">
@@ -332,7 +327,7 @@ export default function Gamification() {
                         </div>
                     )}
 
-                    {/* LISTA DE COMPETIDORES (Minimalista) */}
+                    {/* LISTA DE COMPETIDORES */}
                     <div className="bg-white rounded-2xl border border-gray-100/80 shadow-sm overflow-hidden">
                         {restOfList.length === 0 && topThree.length === 0 ? (
                             <div className="p-8 text-center text-gray-400 text-sm">

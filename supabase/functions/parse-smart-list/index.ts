@@ -16,27 +16,33 @@ serve(async (req) => {
 
         if (!text) throw new Error('Texto não fornecido');
 
-        // PROMPT REFINADO: Foca em nomes no SINGULAR e GENÉRICOS para facilitar o match no banco
-        const systemPrompt = `Você é um assistente especialista em organizar listas de compras.
-Sua tarefa é converter texto desestruturado em JSON limpo.
+        // PROMPT ATUALIZADO:
+        // Prioriza a criação de itens GENÉRICOS e SIMPLES para facilitar o match de "Menor Preço".
+        // Instrução explícita para ignorar marcas a menos que muito específicas, e ignorar quantidades no nome.
+        const systemPrompt = `Você é um assistente especialista em organizar listas de compras simples e rápidas.
+Sua tarefa é converter texto falado ou digitado em uma lista JSON limpa de produtos.
 
-REGRAS CRÍTICAS DE NOMECLATURA:
-1. Use SEMPRE o SINGULAR (Ex: "Limões" -> "Limão", "Arrozes" -> "Arroz").
-2. Remova adjetivos de quantidade ou embalagem do nome (Ex: "Pacote de Arroz" -> "Arroz", "Garrafa de óleo" -> "Óleo").
-3. Mantenha marca se especificada, mas prefira nomes curtos.
+OBJETIVO:
+O usuário quer adicionar itens rapidamente (ex: "Arroz, Feijão, Batata").
+Você deve retornar apenas o NOME BASE do produto, no singular.
 
-CATEGORIAS PERMITIDAS:
-"Hortifruti", "Açougue", "Padaria", "Laticínios", "Mercearia", "Bebidas", "Limpeza", "Higiene", "Outros".
+REGRAS DE OURO:
+1. NOME GENÉRICO: Se o usuário disser "Arroz Tio João", prefira retornar "Arroz" se não for crucial. Se ele disser apenas "Arroz", retorne "Arroz". O objetivo é encontrar o mais barato depois.
+2. SINGULAR SEMPRE: "Limões" -> "Limão". "Pães" -> "Pão Francês" (se for o caso) ou "Pão".
+3. SEM QUANTIDADES NO NOME: "2kg de carne" -> nome: "Carne", quantity: 1 (padrão). A quantidade será ajustada depois pelo usuário se necessário, mas foque em identificar o PRODUTO.
+4. CATEGORIZAÇÃO: Tente categorizar corretamente.
 
-Exemplo Entrada: "traz 2 leites, uns pães e 1kg de contra file"
+Exemplo Entrada: "preciso de arroz, 2 leites e batata doce"
 Exemplo Saída:
 {
   "items": [
-    { "name": "Leite", "quantity": 2, "category": "Laticínios" },
-    { "name": "Pão Francês", "quantity": 5, "category": "Padaria" },
-    { "name": "Contra Filé", "quantity": 1, "category": "Açougue" }
+    { "name": "Arroz", "category": "Mercearia" },
+    { "name": "Leite", "category": "Laticínios" },
+    { "name": "Batata Doce", "category": "Hortifruti" }
   ]
-}`;
+}
+
+Se a entrada for confusa, tente extrair o máximo de itens possível.`;
 
         const response = await fetch('https://api.openai.com/v1/chat/completions', {
             method: 'POST',
