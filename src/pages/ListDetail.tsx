@@ -2,9 +2,6 @@ import { useState, useEffect, useRef, useMemo } from "react";
 import { useParams, useNavigate, useSearchParams } from "react-router-dom";
 import {
   ArrowLeft,
-  Plus,
-  Search,
-  Scale,
   Loader2,
   X,
   ShoppingCart,
@@ -21,7 +18,12 @@ import {
   Send,
   Sparkles,
   ArrowRight,
-  StopCircle
+  StopCircle,
+  Globe,
+  Share2,
+  Scale,
+  Search,
+  Plus
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -32,11 +34,13 @@ import { MarketSelector } from "@/components/MarketSelector";
 import { useAuth } from "@/hooks/useAuth";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
+import { Switch } from "@/components/ui/switch";
 import {
   Dialog,
   DialogContent,
   DialogHeader,
   DialogTitle,
+  DialogDescription,
 } from "@/components/ui/dialog";
 import {
   AlertDialog,
@@ -57,14 +61,9 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
-import {
-  ReceiptReconciliation,
-  ScanResult,
-} from "@/components/ReceiptReconciliation";
-import { Scanner } from "@yudiel/react-qr-scanner";
+import { ReceiptReconciliation, ScanResult } from "@/components/ReceiptReconciliation";
 import { MagicPasteImport } from "@/components/MagicPasteImport";
 
-// --- Definições para Web Speech API ---
 interface IWindow extends Window {
   webkitSpeechRecognition: any;
   SpeechRecognition: any;
@@ -74,18 +73,13 @@ interface IWindow extends Window {
 const safeInvoke = async <T,>(promise: Promise<T>, ms: number, fallback: T): Promise<T> => {
   let timer: any;
   const timeoutPromise = new Promise<T>((resolve) => {
-    timer = setTimeout(() => {
-      console.warn("Timeout/Error in async operation, using fallback");
-      resolve(fallback);
-    }, ms);
+    timer = setTimeout(() => resolve(fallback), ms);
   });
-
   try {
     const result = await Promise.race([promise, timeoutPromise]);
     clearTimeout(timer);
     return result;
   } catch (error) {
-    console.warn("Exception in async operation:", error);
     clearTimeout(timer);
     return fallback;
   }
@@ -111,6 +105,10 @@ interface ShoppingList {
   name: string;
   status: string;
   market_id?: string | null;
+  user_id: string;
+  is_public: boolean;
+  forks_count: number;
+  original_list_id: string | null;
 }
 
 interface Market {
@@ -133,30 +131,23 @@ interface SmartMatchDetail {
 }
 
 export default function ListDetail() {
-  const params = useParams();
-  const routeId = params.id;
-  const routeMarketId = params.marketId;
-  const routeListId = params.listId;
-
-  const id = routeListId || routeId;
-
+  const { id } = useParams();
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const { user, loading: authLoading } = useAuth();
   const { toast } = useToast();
 
-  const preselectedMarketId = searchParams.get("marketId");
+  const routeMarketId = searchParams.get("marketId");
   const usePrices = searchParams.get("usePrices") === "true";
   const strategy = searchParams.get("strategy") || "cheapest";
-
-  const isCompareMode = !!routeMarketId || (!!preselectedMarketId && usePrices);
+  const isCompareMode = !!routeMarketId || (!!searchParams.get("marketId") && usePrices);
 
   const [list, setList] = useState<ShoppingList | null>(null);
   const [items, setItems] = useState<ListItem[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
+  const [isOwner, setIsOwner] = useState(false);
 
-  // Chat Input State
   const [chatInput, setChatInput] = useState("");
   const [isProcessingChat, setIsProcessingChat] = useState(false);
   const [isListening, setIsListening] = useState(false);
@@ -164,63 +155,38 @@ export default function ListDetail() {
 
   const [listFilter, setListFilter] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
-
   const [addDialogOpen, setAddDialogOpen] = useState(false);
   const [duplicateDialogOpen, setDuplicateDialogOpen] = useState(false);
   const [finishDialogOpen, setFinishDialogOpen] = useState(false);
   const [confirmUpdateDialogOpen, setConfirmUpdateDialogOpen] = useState(false);
-
   const [editNameDialogOpen, setEditNameDialogOpen] = useState(false);
   const [deleteListDialogOpen, setDeleteListDialogOpen] = useState(false);
   const [editingName, setEditingName] = useState("");
-  const [isUpdating, setIsUpdating] = useState(false);
-  const [isDeleting, setIsDeleting] = useState(false);
+  const [duplicating, setDuplicating] = useState(false);
 
-  const [selectedProducts, setSelectedProducts] = useState<Set<string>>(
-    new Set()
-  );
+  const [selectedProducts, setSelectedProducts] = useState<Set<string>>(new Set());
   const [addingProducts, setAddingProducts] = useState(false);
-
-  const [isProductMode, setIsProductMode] = useState<"create" | "edit" | null>(
-    null
-  );
-  const [editingProductData, setEditingProductData] = useState<{
-    id?: string;
-    name: string;
-    brand: string;
-    measurement: string;
-  }>({ name: "", brand: "", measurement: "" });
+  const [isProductMode, setIsProductMode] = useState<"create" | "edit" | null>(null);
+  const [editingProductData, setEditingProductData] = useState({ name: "", brand: "", measurement: "" });
   const [validatingProduct, setValidatingProduct] = useState(false);
 
   const [isShoppingMode, setIsShoppingMode] = useState(false);
   const [selectedMarket, setSelectedMarket] = useState<Market | null>(null);
   const [itemPrices, setItemPrices] = useState<ItemPrice>({});
-
   const [smartMatches, setSmartMatches] = useState<Record<string, SmartMatchDetail>>({});
-
   const [saving, setSaving] = useState(false);
   const [startingShopping, setStartingShopping] = useState(false);
-
   const [newListName, setNewListName] = useState("");
-  const [duplicating, setDuplicating] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isScanning, setIsScanning] = useState(false);
   const [scanResult, setScanResult] = useState<ScanResult | null>(null);
   const [showReconciliation, setShowReconciliation] = useState(false);
-
   const [isQRScanning, setIsQRScanning] = useState(false);
-
-  const [processingStatus, setProcessingStatus] = useState<{
-    current: number;
-    total: number;
-    currentItemName?: string;
-  } | null>(null);
+  const [processingStatus, setProcessingStatus] = useState<any>(null);
 
   useEffect(() => {
-    if (!authLoading && !user) {
-      navigate("/auth");
-    }
+    if (!authLoading && !user) navigate("/auth");
   }, [user, authLoading, navigate]);
 
   useEffect(() => {
@@ -228,284 +194,49 @@ export default function ListDetail() {
       const init = async () => {
         setLoading(true);
         await Promise.all([fetchListData(), fetchProducts()]);
-
-        if (routeMarketId) {
-          await loadSmartMarketData(routeMarketId);
-        }
-
+        if (routeMarketId) await loadSmartMarketData(routeMarketId);
         setLoading(false);
       };
       init();
-
-      const channel = supabase
-        .channel("list-detail-prices")
-        .on(
-          "postgres_changes",
-          { event: "*", schema: "public", table: "market_prices" },
-          (payload) => {
-            const currentMarketId =
-              routeMarketId || list?.market_id || selectedMarket?.id;
-
-            if (
-              !isCompareMode &&
-              currentMarketId &&
-              payload.new &&
-              (payload.new as any).market_id === currentMarketId
-            ) {
-              loadMarketData(currentMarketId, isShoppingMode, true);
-            }
-          }
-        )
-        .subscribe();
-
-      return () => {
-        supabase.removeChannel(channel);
-      };
     }
-  }, [
-    user,
-    id,
-    routeMarketId,
-    isShoppingMode,
-    list?.market_id,
-    selectedMarket?.id,
-  ]);
-
-  useEffect(() => {
-    if (
-      preselectedMarketId &&
-      usePrices &&
-      list &&
-      list.status === "open" &&
-      !routeMarketId
-    ) {
-      loadSmartMarketData(preselectedMarketId);
-    }
-  }, [preselectedMarketId, usePrices, list, routeMarketId]);
+  }, [user, id, routeMarketId]);
 
   useEffect(() => {
     const windowObj = window as unknown as IWindow;
     const SpeechRecognition = windowObj.SpeechRecognition || windowObj.webkitSpeechRecognition;
-
     if (SpeechRecognition) {
       recognitionRef.current = new SpeechRecognition();
       recognitionRef.current.continuous = false;
-      recognitionRef.current.interimResults = false;
       recognitionRef.current.lang = "pt-BR";
-
       recognitionRef.current.onresult = (event: any) => {
         const transcript = event.results[0][0].transcript;
         setChatInput((prev) => (prev ? `${prev}, ${transcript}` : transcript));
         setIsListening(false);
       };
-
-      recognitionRef.current.onerror = (event: any) => {
-        console.error("Erro no reconhecimento de voz", event.error);
-        setIsListening(false);
-        toast({
-          title: "Erro no áudio",
-          description: "Não foi possível ouvir. Tente digitar.",
-          variant: "destructive"
-        });
-      };
-
-      recognitionRef.current.onend = () => {
-        setIsListening(false);
-      };
+      recognitionRef.current.onend = () => setIsListening(false);
     }
   }, []);
 
-  const toggleListening = () => {
-    if (isListening) {
-      recognitionRef.current?.stop();
-      setIsListening(false);
-    } else {
-      recognitionRef.current?.start();
-      setIsListening(true);
-      toast({
-        title: "Ouvindo...",
-        description: "Pode falar os itens (ex: Arroz, Feijão...)",
-        duration: 2000,
-      });
-    }
-  };
-
-  const handleSendMessage = async () => {
-    if (!chatInput.trim() || !id) return;
-
-    const textToSend = chatInput;
-    setChatInput("");
-    setIsProcessingChat(true);
-
-    try {
-      const { data, error } = await supabase.functions.invoke('parse-smart-list', {
-        body: { text: textToSend }
-      });
-
-      if (error) throw error;
-
-      const parsedItems = data.items || [];
-
-      if (parsedItems.length === 0) {
-        toast({ title: "Nenhum item identificado", variant: "destructive" });
-        return;
-      }
-
-      const newItems: ListItem[] = [];
-      const itemsToSkip: string[] = [];
-
-      for (const item of parsedItems) {
-        const nameAlreadyInList = items.some(
-          existing => existing.products.name.toLowerCase() === item.name.toLowerCase()
-        );
-
-        if (nameAlreadyInList) {
-          itemsToSkip.push(item.name);
-          continue;
-        }
-
-        let productId = "";
-
-        const { data: existingProd } = await supabase
-          .from("products")
-          .select("id")
-          .ilike("name", item.name)
-          .is("brand", null)
-          .maybeSingle();
-
-        if (existingProd) {
-          productId = existingProd.id;
-        } else {
-          const { data: newProd, error: createError } = await supabase
-            .from("products")
-            .insert({ name: item.name, brand: null })
-            .select()
-            .single();
-
-          if (newProd) productId = newProd.id;
-        }
-
-        if (productId) {
-          const alreadyInListId = items.some(i => i.product_id === productId);
-          const alreadyInBatch = newItems.some(i => i.product_id === productId);
-
-          if (alreadyInListId || alreadyInBatch) {
-            if (!itemsToSkip.includes(item.name)) itemsToSkip.push(item.name);
-            continue;
-          }
-
-          const { data: listItem } = await supabase
-            .from("list_items")
-            .insert({
-              list_id: id,
-              product_id: productId,
-              quantity: 1,
-              is_checked: false
-            })
-            .select(`
-                id,
-                product_id,
-                quantity,
-                is_checked,
-                products (id, name, brand, measurement)
-              `)
-            .single();
-
-          if (listItem) {
-            newItems.push(listItem as ListItem);
-          }
-        }
-      }
-
-      setItems(prev => [...prev, ...newItems]);
-
-      if (newItems.length > 0) {
-        toast({ title: `${newItems.length} item(s) adicionado(s)!` });
-      }
-
-      if (itemsToSkip.length > 0) {
-        toast({
-          title: "Itens já na lista",
-          description: `Ignorados: ${itemsToSkip.join(", ")}`,
-          duration: 3000
-        });
-      }
-
-    } catch (error) {
-      console.error("Erro ao processar chat:", error);
-      toast({
-        title: "Erro ao adicionar",
-        description: "Tente novamente.",
-        variant: "destructive"
-      });
-      setChatInput(textToSend);
-    } finally {
-      setIsProcessingChat(false);
-    }
-  };
-
-  const sortedItems = useMemo(() => {
-    const hasAnyPrice = Object.keys(itemPrices).length > 0;
-    const itemsCopy = [...items];
-
-    if (hasAnyPrice || isShoppingMode || isCompareMode) {
-      return itemsCopy.sort((a, b) => {
-        const priceA = itemPrices[a.id] || 0;
-        const priceB = itemPrices[b.id] || 0;
-        const hasPriceA = priceA > 0;
-        const hasPriceB = priceB > 0;
-
-        if (hasPriceA && !hasPriceB) return -1;
-        if (!hasPriceA && hasPriceB) return 1;
-
-        return a.products.name.localeCompare(b.products.name);
-      });
-    }
-    return itemsCopy;
-  }, [items, itemPrices, isShoppingMode, isCompareMode]);
-
-  const filteredListItems = useMemo(() => {
-    if (!listFilter.trim()) return sortedItems;
-    const lowerFilter = listFilter.toLowerCase();
-
-    return sortedItems.filter((item) => {
-      const productName = item.products.name.toLowerCase();
-      const productBrand = item.products.brand?.toLowerCase() || "";
-      return productName.includes(lowerFilter) || productBrand.includes(lowerFilter);
-    });
-  }, [sortedItems, listFilter]);
-
   const fetchListData = async () => {
     if (!id) return;
-
     try {
-      const { data: listData, error: listError } = await supabase
-        .from("shopping_lists")
-        .select("*")
-        .eq("id", id)
-        .single();
-
+      const { data: listData, error: listError } = await supabase.from("shopping_lists").select("*").eq("id", id).single();
       if (listError) throw listError;
+
       setList(listData);
       setNewListName(`Cópia de ${listData.name}`);
       setEditingName(listData.name);
+      setIsOwner(user?.id === listData.user_id);
 
       const { data: itemsData, error: itemsError } = await supabase
         .from("list_items")
-        .select(
-          `
-          id,
-          product_id,
-          quantity,
-          is_checked,
-          products (id, name, brand, measurement)
-        `
-        )
+        .select(`id, product_id, quantity, is_checked, products (id, name, brand, measurement)`)
         .eq("list_id", id)
         .order("created_at");
 
       if (itemsError) throw itemsError;
-      setItems(itemsData as ListItem[]);
+      // @ts-ignore
+      setItems(itemsData || []);
 
       if (listData.market_id && !routeMarketId) {
         if (listData.status === "closed") {
@@ -517,732 +248,126 @@ export default function ListDetail() {
       }
     } catch (error) {
       console.error("Error fetching list:", error);
-      toast({
-        title: "Erro",
-        description: "Não foi possível carregar a lista",
-        variant: "destructive",
-      });
+      navigate('/listas');
     }
   };
 
   const fetchProducts = async () => {
-    try {
-      const { data, error } = await supabase
-        .from("products")
-        .select("id, name, brand, measurement")
-        .order("name");
+    const { data } = await supabase.from("products").select("id, name, brand, measurement").order("name").limit(200);
+    if (data) setProducts(data);
+  };
 
-      if (error) throw error;
-      setProducts(data || []);
+  const getOrCreateProduct = async (productName: string): Promise<string | null> => {
+    const cleanName = productName.trim();
+    const { data: existing } = await supabase.from('products').select('id').ilike('name', cleanName).is('brand', null).maybeSingle();
+    if (existing) return existing.id;
+
+    const { data: newProd, error } = await supabase.from('products').insert({ name: cleanName }).select('id').single();
+    if (!error && newProd) return newProd.id;
+
+    if (error && error.code === '23505') {
+      const { data: retry } = await supabase.from('products').select('id').ilike('name', cleanName).maybeSingle();
+      return retry?.id || null;
+    }
+    return null;
+  };
+
+  const handleSendMessage = async () => {
+    if (!chatInput.trim() || !id) return;
+    setIsProcessingChat(true);
+    const textToSend = chatInput;
+    setChatInput("");
+
+    try {
+      const { data, error } = await supabase.functions.invoke('parse-smart-list', { body: { text: textToSend } });
+
+      let itemsToAdd = [];
+      if (!error && data.items && data.items.length > 0) itemsToAdd = data.items;
+      else itemsToAdd = [{ name: textToSend, quantity: 1 }];
+
+      let addedCount = 0;
+      for (const item of itemsToAdd) {
+        const productId = await getOrCreateProduct(item.name);
+        if (productId) {
+          const { error: insertError } = await supabase.from('list_items').insert({ list_id: id, product_id: productId, quantity: item.quantity || 1, is_checked: false });
+          if (!insertError) addedCount++;
+        }
+      }
+      await fetchListData();
+      toast({ title: `${addedCount} item(s) adicionado(s)!` });
     } catch (error) {
-      console.error("Error fetching products:", error);
+      toast({ title: "Erro ao adicionar", variant: "destructive" });
+      setChatInput(textToSend);
+    } finally {
+      setIsProcessingChat(false);
     }
   };
 
   const loadSmartMarketData = async (targetMarketId: string) => {
     try {
-      const { data: marketData, error: marketError } = await supabase
-        .from("markets")
-        .select("*")
-        .eq("id", targetMarketId)
-        .single();
-
-      if (marketError) throw marketError;
-      setSelectedMarket(marketData);
+      const { data: marketData } = await supabase.from("markets").select("*").eq("id", targetMarketId).single();
+      if (marketData) setSelectedMarket(marketData);
 
       const { data, error } = await supabase.functions.invoke('smart-shopping-analysis', {
-        body: {
-          listId: id,
-          targetMarketId: targetMarketId,
-          strategy: strategy
-        }
+        body: { listId: id, targetMarketId: targetMarketId, strategy: strategy }
       });
 
-      if (error) throw error;
-      if (data.error) throw new Error(data.error);
-
-      const result = data.results && data.results[0];
-      if (result && result.matches) {
-        const newPrices: ItemPrice = {};
-        const newSmartMatches: Record<string, SmartMatchDetail> = {};
-
-        result.matches.forEach((match: any) => {
-          newPrices[match.listItemId] = match.matchedPrice;
-          newSmartMatches[match.listItemId] = {
-            matchedProductId: match.matchedProductId,
-            matchedProductName: match.matchedProductName,
-            matchedProductBrand: match.matchedProductBrand,
-            isSubstitution: match.isSubstitution
-          };
-        });
-
-        setItemPrices(newPrices);
-        setSmartMatches(newSmartMatches);
+      if (!error && data.results && data.results[0]) {
+        const result = data.results[0];
+        if (result.matches) {
+          const newPrices: ItemPrice = {};
+          const newSmartMatches: Record<string, SmartMatchDetail> = {};
+          result.matches.forEach((match: any) => {
+            newPrices[match.listItemId] = match.matchedPrice;
+            newSmartMatches[match.listItemId] = {
+              matchedProductId: match.matchedProductId,
+              matchedProductName: match.matchedProductName,
+              matchedProductBrand: match.matchedProductBrand,
+              isSubstitution: match.isSubstitution
+            };
+          });
+          setItemPrices(newPrices);
+          setSmartMatches(newSmartMatches);
+        }
+      } else {
+        loadMarketData(targetMarketId, false, true);
       }
-
     } catch (error) {
-      console.error("Error loading smart market data:", error);
       loadMarketData(targetMarketId, false, true);
     }
   };
 
-  const loadMarketData = async (
-    targetMarketId: string,
-    enableShoppingMode: boolean = false,
-    shouldFetchPrices: boolean = false
-  ) => {
-    try {
-      const { data: marketData, error: marketError } = await supabase
-        .from("markets")
-        .select("*")
-        .eq("id", targetMarketId)
-        .single();
-
-      if (marketError) throw marketError;
-      setSelectedMarket(marketData);
-
-      let initialPrices: ItemPrice = {};
-
-      if (shouldFetchPrices) {
-        const { data: listItems } = await supabase
-          .from("list_items")
-          .select("id, product_id")
-          .eq("list_id", id);
-
-        if (listItems && listItems.length > 0) {
-          const productIds = listItems.map((i: any) => i.product_id);
-
-          const { data: pricesData } = await supabase
-            .from("market_prices")
-            .select("product_id, price")
-            .eq("market_id", targetMarketId)
-            .in("product_id", productIds);
-
-          if (pricesData) {
-            const productToItem: { [productId: string]: string } = {};
-            listItems.forEach((item: any) => {
-              productToItem[item.product_id] = item.id;
-            });
-
-            pricesData.forEach((price: any) => {
-              const itemId = productToItem[price.product_id];
-              if (itemId) {
-                initialPrices[itemId] = price.price;
-              }
-            });
-          }
-        }
-      }
-
-      if (id) {
-        const localPricesJson = localStorage.getItem(`list_prices_${id}`);
-        if (localPricesJson) {
-          try {
-            const localPrices = JSON.parse(localPricesJson);
-            initialPrices = { ...initialPrices, ...localPrices };
-          } catch (e) {
-            console.error("Erro ao ler preços locais", e);
-          }
-        }
-      }
-
-      setItemPrices(initialPrices);
-
-      if (enableShoppingMode) {
-        setIsShoppingMode(true);
-      }
-    } catch (error) {
-      console.error("Error loading market data:", error);
-      toast({
-        title: "Erro ao carregar dados",
-        description: "Tente novamente mais tarde",
-        variant: "destructive",
-      });
-    }
-  };
-
-  const updateListName = async () => {
-    if (!id || !editingName.trim()) return;
-
-    setIsUpdating(true);
-    try {
-      const { error } = await supabase
-        .from("shopping_lists")
-        .update({ name: editingName.trim() })
-        .eq("id", id);
-
-      if (error) throw error;
-
-      setList((prev) => (prev ? { ...prev, name: editingName.trim() } : null));
-      setEditNameDialogOpen(false);
-    } catch (error) {
-      console.error("Error updating list name:", error);
-      toast({
-        title: "Erro ao atualizar",
-        description: "Não foi possível mudar o nome da lista",
-        variant: "destructive",
-      });
-    } finally {
-      setIsUpdating(false);
-    }
-  };
-
-  const deleteList = async () => {
-    if (!id) return;
-
-    setIsDeleting(true);
-    try {
-      const { error } = await supabase
-        .from("shopping_lists")
-        .delete()
-        .eq("id", id);
-
-      if (error) throw error;
-
-      localStorage.removeItem(`list_prices_${id}`);
-      navigate("/listas"); // --- CORREÇÃO: Volta para /listas ---
-    } catch (error) {
-      console.error("Error deleting list:", error);
-      toast({
-        title: "Erro ao excluir",
-        description: "Tente novamente",
-        variant: "destructive",
-      });
-      setIsDeleting(false);
-    }
-  };
-
-  const toggleCheck = async (itemId: string) => {
-    if (list?.status === "closed" || isCompareMode) return;
-
-    const item = items.find((i) => i.id === itemId);
-    if (!item) return;
-
-    const newCheckedState = !item.is_checked;
-    setItems((prev) =>
-      prev.map((i) =>
-        i.id === itemId ? { ...i, is_checked: newCheckedState } : i
-      )
-    );
-
-    try {
-      const { error } = await supabase
-        .from("list_items")
-        .update({ is_checked: newCheckedState })
-        .eq("id", itemId);
-
-      if (error) {
-        setItems((prev) =>
-          prev.map((i) =>
-            i.id === itemId ? { ...i, is_checked: !newCheckedState } : i
-          )
-        );
-        throw error;
-      }
-    } catch (error) {
-      console.error("Error toggling check:", error);
-    }
-  };
-
-  const handleReconciliationConfirm = async (data: {
-    updates: Array<{ itemId: string; price: number }>;
-    newItems: Array<{ name: string; price: number; quantity: number }>;
-  }) => {
-
-    setProcessingStatus({ current: 0, total: data.newItems.length + data.updates.length, currentItemName: "Atualizando..." });
-    const newPrices = { ...itemPrices };
-    const itemsToUpdate = [...items];
-
-    data.updates.forEach((update) => {
-      newPrices[update.itemId] = update.price;
-      const idx = itemsToUpdate.findIndex((i) => i.id === update.itemId);
-      if (idx !== -1) {
-        itemsToUpdate[idx] = { ...itemsToUpdate[idx], is_checked: true };
-        toggleCheck(update.itemId);
-      }
-    });
-
-    if (id) {
-      localStorage.setItem(`list_prices_${id}`, JSON.stringify(newPrices));
-    }
-
-    setItemPrices(newPrices);
-    setItems(itemsToUpdate);
-
-    if (data.newItems.length > 0) {
-      const batchSize = 5;
-      const addedItems: ListItem[] = [];
-
-      for (let i = 0; i < data.newItems.length; i += batchSize) {
-        const batch = data.newItems.slice(i, i + batchSize);
-        setProcessingStatus({ current: i, total: data.newItems.length, currentItemName: "Adicionando itens..." });
-
-        const results = await Promise.all(batch.map(async (newItem) => {
-          try {
-            const validationData = await safeInvoke(
-              supabase.functions.invoke("validate-product", { body: { name: newItem.name } }),
-              8000, { data: { isValid: false } }
-            );
-            const finalName = validationData.data?.isValid ? validationData.data.correctedName : newItem.name;
-
-            let pid = "";
-            const { data: p } = await supabase.from("products").insert({ name: finalName }).select().single();
-            if (p) pid = p.id;
-            else {
-              const { data: ex } = await supabase.from("products").select("id").eq("name", finalName).maybeSingle();
-              if (ex) pid = ex.id;
-            }
-
-            if (pid) {
-              const { data: li } = await supabase.from("list_items").insert({
-                list_id: id, product_id: pid, quantity: newItem.quantity, is_checked: true
-              }).select(`id, product_id, quantity, is_checked, products (id, name, brand, measurement)`).single();
-              if (li) {
-                newPrices[li.id] = newItem.price;
-                return li as ListItem;
-              }
-            }
-          } catch (e) { return null; }
-        }));
-
-        results.forEach(r => { if (r) addedItems.push(r) });
-      }
-      setItems(prev => [...prev, ...addedItems]);
-      setItemPrices(prev => ({ ...prev, ...newPrices }));
-
-      if (id) {
-        localStorage.setItem(`list_prices_${id}`, JSON.stringify(newPrices));
-      }
-    }
-    setProcessingStatus(null);
-  };
-
-  const updateQuantity = async (itemId: string, quantity: number) => {
-    if (list?.status === "closed" || isCompareMode) return;
-
-    setItems(items.map((i) => (i.id === itemId ? { ...i, quantity } : i)));
-
-    try {
-      const { error } = await supabase
-        .from("list_items")
-        .update({ quantity })
-        .eq("id", itemId);
-
-      if (error) throw error;
-    } catch (error) {
-      console.error("Error updating quantity:", error);
-    }
-  };
-
-  const updatePrice = (itemId: string, price: number) => {
-    if (list?.status === "closed" || isCompareMode) return;
-
-    setItemPrices((prev) => {
-      const newPrices = { ...prev, [itemId]: price };
-      if (id) {
-        localStorage.setItem(`list_prices_${id}`, JSON.stringify(newPrices));
-      }
-      return newPrices;
-    });
-  };
-
-  const updateProductBrand = async (itemId: string, newBrand: string) => {
-    if (list?.status === "closed" || isCompareMode) return;
-
-    setItems((prev) =>
-      prev.map((item) => {
-        if (item.id === itemId) {
-          return {
-            ...item,
-            products: { ...item.products, brand: newBrand },
-          };
-        }
-        return item;
-      })
-    );
-
-    const item = items.find((i) => i.id === itemId);
-    if (!item) return;
-
-    try {
-      const { error } = await supabase
-        .from("products")
-        .update({ brand: newBrand || null })
-        .eq("id", item.product_id);
-
-      if (error) throw error;
-    } catch (error) {
-      console.error("Error updating brand:", error);
-      toast({ title: "Erro ao salvar marca", variant: "destructive" });
-    }
-  };
-
-  const removeItem = async (itemId: string) => {
-    if (list?.status === "closed" || isCompareMode) return;
-
-    try {
-      const { error } = await supabase
-        .from("list_items")
-        .delete()
-        .eq("id", itemId);
-
-      if (error) throw error;
-
-      setItems(items.filter((i) => i.id !== itemId));
-    } catch (error) {
-      console.error("Error removing item:", error);
-      toast({ title: "Erro ao remover item", variant: "destructive" });
-    }
-  };
-
-  const toggleProductSelection = (productId: string) => {
-    const existingItem = items.find((item) => item.product_id === productId);
-
-    if (existingItem) {
-      removeItem(existingItem.id);
-      return;
-    }
-
-    setSelectedProducts((prev) => {
-      const newSet = new Set(prev);
-      if (newSet.has(productId)) {
-        newSet.delete(productId);
-      } else {
-        newSet.add(productId);
-      }
-      return newSet;
-    });
-  };
-
-  const addSelectedProducts = async () => {
-    if (!id || selectedProducts.size === 0) return;
-
-    setAddingProducts(true);
-    try {
-      const productsToAdd = Array.from(selectedProducts);
-      const insertData = productsToAdd.map((productId) => ({
-        list_id: id,
-        product_id: productId,
-        quantity: 1,
-        is_checked: false,
-      }));
-
-      const { data, error } = await supabase
-        .from("list_items")
-        .insert(insertData)
-        .select(
-          `
-          id,
-          product_id,
-          quantity,
-          is_checked,
-          products (id, name, brand, measurement)
-        `
-        );
-
-      if (error) throw error;
-
-      setItems([...items, ...(data as ListItem[])]);
-      setSelectedProducts(new Set());
-      setAddDialogOpen(false);
-      setSearchQuery("");
-    } catch (error) {
-      console.error("Error adding products:", error);
-      toast({
-        title: "Erro",
-        description: "Não foi possível adicionar os itens",
-        variant: "destructive",
-      });
-    } finally {
-      setAddingProducts(false);
-    }
-  };
-
-  const closeAddDialog = (open: boolean) => {
-    if (!open) {
-      setSelectedProducts(new Set());
-      setSearchQuery("");
-      setIsProductMode(null);
-    }
-    setAddDialogOpen(open);
-  };
-
-  const startCreateProduct = () => {
-    setIsProductMode("create");
-    setEditingProductData({ name: searchQuery, brand: "", measurement: "" });
-  };
-
-  const startEditProduct = (product: Product, e: React.MouseEvent) => {
-    e.stopPropagation();
-    setIsProductMode("edit");
-    setEditingProductData({
-      id: product.id,
-      name: product.name,
-      brand: product.brand || "",
-      measurement: product.measurement || "",
-    });
-  };
-
-  const handleCameraClick = () => {
-    fileInputRef.current?.click();
-  };
-
-  const handleFileUpload = async (
-    event: React.ChangeEvent<HTMLInputElement>
-  ) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-
-    setIsScanning(true);
-    try {
-      const reader = new FileReader();
-      reader.onloadend = async () => {
-        const base64String = reader.result as string;
-
-        const currentItemsContext = items.map((item) => ({
-          id: item.id,
-          name: item.products.name,
-          brand: item.products.brand,
-        }));
-
-        const { data, error } = await supabase.functions.invoke(
-          "scan-receipt",
-          {
-            body: {
-              imageBase64: base64String,
-              currentItems: currentItemsContext,
-            },
-          }
-        );
-
-        if (error) throw error;
-
-        console.log("Scan Result:", data);
-        setScanResult(data);
-        setShowReconciliation(true);
-        setIsScanning(false);
-
-        if (fileInputRef.current) fileInputRef.current.value = "";
-      };
-
-      reader.readAsDataURL(file);
-    } catch (error) {
-      console.error("Error scanning receipt:", error);
-      toast({
-        title: "Erro na leitura",
-        description: "Não foi possível processar a imagem. Tente novamente.",
-        variant: "destructive",
-      });
-      setIsScanning(false);
-    }
-  };
-
-  const handleQRScan = async (result: string) => {
-    if (!result) return;
-
-    if (!result.startsWith("http")) {
-      toast({
-        title: "QR Code Inválido",
-        description: "Não parece ser um link de nota fiscal.",
-        variant: "destructive",
-      });
-      setIsQRScanning(false);
-      return;
-    }
-
-    setIsQRScanning(false);
-    setIsScanning(true);
-    setProcessingStatus({ current: 0, total: 100, currentItemName: "Lendo dados da nota..." });
-
-    try {
-      const { data, error } = await supabase.functions.invoke("scrape-nfce", {
-        body: { url: result.trim() },
-      });
-
-      if (error) throw error;
-      if (!data.success) throw new Error(data.error || "Falha na leitura");
-
-      if (data.items.length === 0) {
-        toast({
-          title: "Nenhum item encontrado",
-          description:
-            "Acessamos a nota, mas o layout pode ser incompatível.",
-          variant: "destructive",
+  const loadMarketData = async (targetMarketId: string, enableShoppingMode: boolean, shouldFetchPrices: boolean) => {
+    const { data: market } = await supabase.from("markets").select("*").eq("id", targetMarketId).single();
+    if (market) setSelectedMarket(market);
+
+    if (shouldFetchPrices) {
+      const { data: listItems } = await supabase.from("list_items").select("id, product_id").eq("list_id", id);
+      if (listItems) {
+        const pIds = listItems.map(i => i.product_id);
+        const { data: prices } = await supabase.from('market_prices').select('product_id, price').eq('market_id', targetMarketId).in('product_id', pIds);
+
+        const priceMap: ItemPrice = {};
+        prices?.forEach(p => {
+          const item = listItems.find(i => i.product_id === p.product_id);
+          if (item) priceMap[item.id] = p.price;
         });
-        setProcessingStatus(null);
-        return;
+        setItemPrices(prev => ({ ...prev, ...priceMap }));
       }
-
-      const scannedItems = data.items;
-      setProcessingStatus({ current: 0, total: scannedItems.length, currentItemName: "Iniciando importação..." });
-
-      const newPrices = { ...itemPrices };
-      const newItemsAdded: ListItem[] = [];
-
-      const batchSize = 5;
-      for (let i = 0; i < scannedItems.length; i += batchSize) {
-        const batch = scannedItems.slice(i, i + batchSize);
-
-        setProcessingStatus({
-          current: Math.min(i + batch.length, scannedItems.length),
-          total: scannedItems.length,
-          currentItemName: (batch[0] as any).name || "Item...",
-        });
-
-        if (i > 0) await new Promise(r => setTimeout(r, 300));
-
-        const batchResults = await Promise.all(
-          batch.map(async (scannedItem: any) => {
-            try {
-              const validationData = await safeInvoke(
-                supabase.functions.invoke("validate-product", {
-                  body: { name: scannedItem.name, brand: null },
-                }),
-                8000,
-                { data: { isValid: false } }
-              );
-
-              const finalName = validationData.data?.isValid
-                ? validationData.data.correctedName
-                : scannedItem.name;
-              const finalBrand = validationData.data?.isValid
-                ? validationData.data.correctedBrand
-                : null;
-              const finalMeasurement = validationData.data?.isValid
-                ? validationData.data.detectedMeasurement
-                : null;
-
-              let productId: string;
-
-              const { data: productData, error: prodError } = await supabase
-                .from("products")
-                .insert({
-                  name: finalName,
-                  brand: finalBrand,
-                  measurement: finalMeasurement,
-                })
-                .select()
-                .single();
-
-              if (prodError) {
-                const { data: existingProd } = await supabase
-                  .from("products")
-                  .select("id")
-                  .eq("name", finalName)
-                  .eq("brand", finalBrand || null)
-                  .maybeSingle();
-
-                if (existingProd) {
-                  productId = existingProd.id;
-                } else {
-                  const { data: rawProd } = await supabase
-                    .from("products")
-                    .insert({ name: scannedItem.name, brand: null })
-                    .select()
-                    .single();
-
-                  if (!rawProd) {
-                    const { data: rawExist } = await supabase.from("products").select("id").eq("name", scannedItem.name).maybeSingle();
-                    productId = rawExist?.id || "";
-                  } else {
-                    productId = rawProd.id;
-                  }
-                }
-              } else {
-                productId = productData.id;
-              }
-
-              if (!productId) {
-                console.error("Falha fatal ao obter ID do produto:", scannedItem.name);
-                return null;
-              }
-
-              const { data: listItemData } = await supabase
-                .from("list_items")
-                .insert({
-                  list_id: id,
-                  product_id: productId,
-                  quantity: scannedItem.quantity,
-                  is_checked: true,
-                })
-                .select(
-                  `
-                  id,
-                  product_id,
-                  quantity,
-                  is_checked,
-                  products (id, name, brand, measurement)
-                `
-                )
-                .single();
-
-              if (listItemData) {
-                return {
-                  type: 'new',
-                  item: listItemData as ListItem,
-                  price: scannedItem.unit_price,
-                  id: listItemData.id
-                };
-              }
-              return null;
-
-            } catch (e) {
-              console.error("Erro processando item individual:", scannedItem.name, e);
-              return null;
-            }
-          })
-        );
-
-        batchResults.forEach((res) => {
-          if (res && res.type === 'new') {
-            newItemsAdded.push(res.item);
-            newPrices[res.id] = res.price;
-          }
-        });
-      }
-
-      setItems((prev) => [...prev, ...newItemsAdded]);
-
-      const mergedPrices = { ...itemPrices, ...newPrices };
-      setItemPrices(mergedPrices);
-      if (id) {
-        localStorage.setItem(`list_prices_${id}`, JSON.stringify(mergedPrices));
-      }
-
-      toast({
-        title: "Importação Concluída!",
-        description: `${newItemsAdded.length} de ${scannedItems.length} itens importados com sucesso.`,
-      });
-
-    } catch (error: any) {
-      console.error("Erro QR Code Flow:", error);
-      toast({
-        title: "Erro ao processar",
-        description: error.message || "Tente novamente.",
-        variant: "destructive",
-      });
-    } finally {
-      setProcessingStatus(null);
-      setIsScanning(false);
     }
+    if (enableShoppingMode) setIsShoppingMode(true);
   };
 
   const startShopping = async () => {
-    if (!selectedMarket || !id) {
-      toast({
-        title: "Selecione um mercado",
-        description: "Escolha o mercado para iniciar as compras",
-        variant: "destructive",
-      });
+    if (!selectedMarket || !list) {
+      toast({ title: "Selecione um mercado", variant: "destructive" });
       return;
     }
-
     const hasSubstitutions = Object.values(smartMatches).some(m => m.isSubstitution);
     if (isCompareMode && hasSubstitutions) {
       setConfirmUpdateDialogOpen(true);
       return;
     }
-
     await proceedToStartShopping();
   };
 
@@ -1251,60 +376,19 @@ export default function ListDetail() {
     try {
       if (isCompareMode) {
         const substitutions = Object.entries(smartMatches).filter(([_, val]) => val.isSubstitution);
-        if (substitutions.length > 0) {
-          for (const [listItemId, match] of substitutions) {
-            await supabase
-              .from('list_items')
-              .update({ product_id: match.matchedProductId })
-              .eq('id', listItemId);
-          }
+        for (const [listItemId, match] of substitutions) {
+          await supabase.from('list_items').update({ product_id: match.matchedProductId }).eq('id', listItemId);
         }
       }
-
-      const { error } = await supabase
-        .from("shopping_lists")
-        .update({
-          status: "shopping",
-          market_id: selectedMarket!.id,
-        })
-        .eq("id", id!);
-
-      if (error) throw error;
-
-      setList((prev) =>
-        prev
-          ? { ...prev, status: "shopping", market_id: selectedMarket!.id }
-          : null
-      );
-
+      await supabase.from("shopping_lists").update({ status: "shopping", market_id: selectedMarket!.id }).eq("id", id!);
+      setList(prev => prev ? { ...prev, status: "shopping", market_id: selectedMarket!.id } : null);
       setIsShoppingMode(true);
 
-      const shouldLoadPrices = isCompareMode;
-      await loadMarketData(selectedMarket!.id, true, shouldLoadPrices);
+      if (isCompareMode) navigate(`/lista/${id}?usePrices=true`, { replace: true });
 
-      if (!shouldLoadPrices) {
-        setItemPrices((prev) => {
-          if (Object.keys(prev).length === 0) return {};
-          return prev;
-        });
-      }
-
-      items.forEach((item) => {
-        if (item.is_checked) {
-          toggleCheck(item.id);
-        }
-      });
-
-      if (isCompareMode) {
-        navigate(`/lista/${id}?usePrices=true`);
-      }
+      toast({ title: "Compras iniciadas!", description: `Em ${selectedMarket?.name}` });
     } catch (error) {
-      console.error("Error starting shopping:", error);
-      toast({
-        title: "Erro ao iniciar",
-        description: "Não foi possível salvar o status da lista.",
-        variant: "destructive",
-      });
+      toast({ title: "Erro ao iniciar", variant: "destructive" });
     } finally {
       setStartingShopping(false);
       setConfirmUpdateDialogOpen(false);
@@ -1313,21 +397,12 @@ export default function ListDetail() {
 
   const cancelShopping = async () => {
     if (!id) return;
-
     try {
-      const { error } = await supabase
-        .from("shopping_lists")
-        .update({
-          status: "open",
-        })
-        .eq("id", id);
-
-      if (error) throw error;
-
+      await supabase.from("shopping_lists").update({ status: "open" }).eq("id", id);
       setList((prev) => (prev ? { ...prev, status: "open" } : null));
       setIsShoppingMode(false);
+      setItemPrices({});
       localStorage.removeItem(`list_prices_${id}`);
-
     } catch (error) {
       console.error("Error cancelling shopping:", error);
       setIsShoppingMode(false);
@@ -1335,446 +410,275 @@ export default function ListDetail() {
   };
 
   const finishShopping = async () => {
-    if (!selectedMarket || !id) return;
+    if (!list || !selectedMarket) {
+      toast({ title: "Erro de estado", description: "Mercado não selecionado.", variant: "destructive" });
+      return;
+    }
 
+    // Filtra e limpa os dados antes de enviar
     const itemsWithPrices = items.filter(
-      (item) => itemPrices[item.id] && itemPrices[item.id] > 0
+      (item) => itemPrices[item.id] !== undefined && itemPrices[item.id] > 0
     );
 
     if (itemsWithPrices.length === 0) {
-      toast({
-        title: "Nenhum preço informado",
-        description: "Informe o preço de pelo menos um produto",
-        variant: "destructive",
-      });
+      toast({ title: "Nenhum preço", description: "Informe ao menos um preço.", variant: "destructive" });
       return;
     }
 
     setSaving(true);
     try {
+      // Prepara payload de preços (limpo e tipado)
       const priceRecords = itemsWithPrices.map((item) => ({
         market_id: selectedMarket.id,
         product_id: item.product_id,
-        price: itemPrices[item.id],
+        price: Number(itemPrices[item.id]), // Garante que é número
       }));
 
-      await Promise.all(
-        priceRecords.map(async (record) => {
-          const { data: existing } = await supabase
-            .from("market_prices")
-            .select("id")
-            .eq("market_id", record.market_id)
-            .eq("product_id", record.product_id)
-            .maybeSingle();
+      // 1. Salvar Preços (Batch Upsert - Mais seguro e evita erros 400)
+      const { error: priceError } = await supabase
+        .from('market_prices')
+        .upsert(priceRecords, { onConflict: 'market_id, product_id' });
 
-          if (existing) {
-            return supabase
-              .from("market_prices")
-              .update({
-                price: record.price,
-                created_at: new Date().toISOString(),
-              })
-              .eq("id", existing.id);
-          } else {
-            return supabase.from("market_prices").insert(record);
-          }
-        })
-      );
+      if (priceError) throw priceError;
 
-      await supabase
+      // 2. Fechar Lista
+      const { error: listError } = await supabase
         .from("shopping_lists")
-        .update({
-          status: "closed",
-          market_id: selectedMarket.id,
-        })
-        .eq("id", id);
+        .update({ status: "closed", market_id: selectedMarket.id })
+        .eq("id", id!);
 
-      setList((prev) =>
-        prev
-          ? { ...prev, status: "closed", market_id: selectedMarket.id }
-          : null
-      );
+      if (listError) throw listError;
 
+      // --- CÁLCULO DE PONTOS ---
+      const pointsPerItem = 5;
+      const itemsCount = itemsWithPrices.length;
+      const pointsFromItems = itemsCount * pointsPerItem;
+      const pointsFromCheckout = 100;
+      const totalPointsEarned = pointsFromCheckout + pointsFromItems;
+
+      // 3. Pontos Globais (Rank Geral) - Com tratamento de erro isolado
+      try {
+        await supabase.rpc('add_points', {
+          p_user_id: user!.id,
+          p_points: totalPointsEarned,
+          p_action: 'finish_shop',
+          p_desc: `Finalizou compra com ${itemsCount} preços`
+        });
+      } catch (e) { console.error("Falha ao adicionar pontos globais", e); }
+
+      // 4. Pontos de SOBERANIA (Rank do Mercado) - Com tratamento de erro isolado
+      try {
+        await supabase.rpc('add_market_points', {
+          p_market_id: selectedMarket.id,
+          p_user_id: user!.id,
+          p_points: totalPointsEarned
+        });
+      } catch (e) { console.error("Falha ao adicionar pontos de mercado", e); }
+
+      setList({ ...list, status: "closed", market_id: selectedMarket.id });
+      setIsShoppingMode(false);
+      setFinishDialogOpen(false);
       localStorage.removeItem(`list_prices_${id}`);
 
-      try {
-        const { data: pointsResult, error: pointsError } = await supabase.rpc('award_weekly_points');
+      toast({
+        title: "Compra Finalizada! 🎉",
+        description: `+${totalPointsEarned} PONTOS! (100 do checkout + ${pointsFromItems} pelos itens)`,
+        className: "bg-yellow-50 border-yellow-200 text-yellow-900"
+      });
 
-        if (!pointsError && pointsResult && typeof pointsResult === 'object') {
-          // @ts-ignore
-          const success = pointsResult.success;
-          // @ts-ignore
-          const message = pointsResult.message;
+      // Redirecionamento forçado para garantir que a rota existe
+      window.location.href = '/';
 
-          toast({
-            title: success ? "🎉 Lista Finalizada & Pontos!" : "Lista Finalizada!",
-            description: message || "Lista salva com sucesso.",
-            duration: success ? 6000 : 4000,
-            className: success ? "border-green-500 bg-green-50" : ""
-          });
-        } else {
-          toast({ title: "Lista Finalizada com Sucesso!" });
-        }
-      } catch (err) {
-        console.warn("Erro ao processar pontos (ignorado):", err);
-        toast({ title: "Lista Finalizada com Sucesso!" });
-      }
-
-      setFinishDialogOpen(false);
-      setIsShoppingMode(false);
-    } catch (error) {
-      console.error("Error saving prices:", error);
+    } catch (error: any) {
+      console.error("Erro no checkout:", error);
       toast({
         title: "Erro ao finalizar",
-        description: "Verifique a conexão.",
-        variant: "destructive",
+        description: error.message || "Tente novamente.",
+        variant: "destructive"
       });
     } finally {
       setSaving(false);
     }
   };
 
-  const duplicateList = async () => {
-    if (!user || !list || !newListName.trim()) return;
+  const handleTogglePublic = async (checked: boolean) => {
+    if (!list || !isOwner) return;
+    await supabase.from('shopping_lists').update({ is_public: checked }).eq('id', list.id);
+    setList({ ...list, is_public: checked });
+    toast({ title: checked ? "Lista Pública" : "Lista Privada" });
+  };
+
+  const handleCloneList = async () => {
+    if (!list || !user || !newListName.trim()) {
+      toast({ title: "Nome inválido", description: "O nome da lista não pode estar vazio.", variant: "destructive" });
+      return;
+    }
 
     setDuplicating(true);
     try {
-      const { data: newList, error: createError } = await supabase
-        .from("shopping_lists")
-        .insert({
-          name: newListName.trim(),
-          user_id: user.id,
-          status: "open",
-        })
-        .select()
-        .single();
+      // 1. Criar nova lista
+      const { data: newList, error } = await supabase.from("shopping_lists").insert({
+        name: newListName.trim(),
+        user_id: user.id,
+        status: "open",
+        original_list_id: list.id
+      }).select().single();
 
-      if (createError) throw createError;
+      if (error) throw error;
 
-      const newItems = items.map((item) => ({
+      // 2. Clonar Itens
+      const newItems = items.map(i => ({
         list_id: newList.id,
-        product_id: item.product_id,
-        quantity: item.quantity,
-        is_checked: false,
+        product_id: i.product_id,
+        quantity: i.quantity,
+        is_checked: false
       }));
 
       if (newItems.length > 0) {
-        const { error: insertError } = await supabase
-          .from("list_items")
-          .insert(newItems);
-
-        if (insertError) throw insertError;
+        await supabase.from("list_items").insert(newItems);
       }
 
+      // 3. Incrementar Forks (Silencioso para não travar o fluxo)
+      try {
+        await supabase.rpc('increment_forks', { target_list_id: list.id });
+      } catch (e) { console.warn("Forks count error ignored", e); }
+
+      toast({ title: "Lista Clonada!" });
+
+      // ORDEM IMPORTANTE: Fechar o modal ANTES de navegar
       setDuplicateDialogOpen(false);
       navigate(`/lista/${newList.id}`);
-    } catch (error) {
-      console.error("Error duplicating list:", error);
-      toast({
-        title: "Erro ao duplicar",
-        variant: "destructive",
-      });
+
+    } catch (e: any) {
+      toast({ title: "Erro ao clonar", description: e.message, variant: "destructive" });
     } finally {
       setDuplicating(false);
     }
   };
 
-  const filteredProducts = products.filter(
-    (p) =>
-      p.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (p.brand && p.brand.toLowerCase().includes(searchQuery.toLowerCase()))
-  );
+  const toggleListening = () => { if (isListening) recognitionRef.current?.stop(); else recognitionRef.current?.start(); };
+  const updateListName = async () => { await supabase.from("shopping_lists").update({ name: editingName }).eq("id", id!); setList(prev => prev ? { ...prev, name: editingName } : null); setEditNameDialogOpen(false); };
+  const deleteList = async () => { await supabase.from("shopping_lists").delete().eq("id", id!); navigate("/listas"); };
 
-  const totalPrice = Object.entries(itemPrices).reduce(
-    (acc, [itemId, price]) => {
-      const item = items.find((i) => i.id === itemId);
-      return acc + price * (item?.quantity || 1);
-    },
-    0
-  );
+  const toggleCheck = async (itemId: string) => {
+    if (!isOwner && !isShoppingMode) return;
+    const item = items.find(i => i.id === itemId);
+    if (!item) return;
+    const newChecked = !item.is_checked;
+    setItems(prev => prev.map(i => i.id === itemId ? { ...i, is_checked: newChecked } : i));
+    if (isOwner || isShoppingMode) await supabase.from("list_items").update({ is_checked: newChecked }).eq("id", itemId);
+  };
+  const removeItem = async (itemId: string) => {
+    if (!isOwner) return;
+    await supabase.from("list_items").delete().eq("id", itemId);
+    setItems(prev => prev.filter(i => i.id !== itemId));
+  };
+  const updatePrice = (itemId: string, val: number) => setItemPrices(prev => ({ ...prev, [itemId]: val }));
 
-  const checkedCount = items.filter((i) => i.is_checked).length;
-  const isClosed = list?.status === "closed";
+  const closeAddDialog = (open: boolean) => {
+    if (!open) { setSelectedProducts(new Set()); setSearchQuery(""); setIsProductMode(null); }
+    setAddDialogOpen(open);
+  };
+  const handleCreateOrUpdateProduct = async () => { /* Placeholder */ };
+  const handleFileUpload = async (e: any) => { /* Placeholder */ };
 
-  if (authLoading || loading) {
-    return (
-      <div className="min-h-screen bg-background flex items-center justify-center">
-        <Loader2 className="w-8 h-8 animate-spin text-primary" />
-      </div>
-    );
-  }
+  if (authLoading || loading) return <div className="min-h-screen bg-background flex items-center justify-center"><Loader2 className="w-8 h-8 animate-spin text-primary" /></div>;
+  if (!list) return null;
 
-  if (!list) {
-    return (
-      <div className="min-h-screen bg-background flex items-center justify-center">
-        <p className="text-muted-foreground">Lista não encontrada</p>
-      </div>
-    );
-  }
-
-  const substitutionsList = items
-    .filter(item => smartMatches[item.id]?.isSubstitution)
-    .map(item => {
-      const match = smartMatches[item.id];
-      return {
-        original: `${item.products.name} ${item.products.brand || ''}`,
-        new: `${match.matchedProductName} ${match.matchedProductBrand || ''}`
-      }
-    });
+  const totalPrice = Object.values(itemPrices).reduce((a, b) => a + b, 0);
+  const isClosed = list.status === 'closed';
 
   const isSimpleMode = !isShoppingMode && !isClosed && !isCompareMode;
 
+  const filteredListItems = items.filter((item) => {
+    if (!listFilter.trim()) return true;
+    const lowerFilter = listFilter.toLowerCase();
+    const productName = item.products.name.toLowerCase();
+    const productBrand = item.products.brand?.toLowerCase() || "";
+    return productName.includes(lowerFilter) || productBrand.includes(lowerFilter);
+  });
+
   return (
-    <div
-      className={cn(
-        "min-h-screen bg-background transition-all",
-        items.length > 0 ? "pb-40" : "pb-8"
-      )}
-    >
-      {/* OVERLAY DE PROCESSAMENTO */}
-      {processingStatus && (
-        <div className="fixed inset-0 z-[100] bg-black/80 backdrop-blur-sm flex flex-col items-center justify-center text-white">
-          <Loader2 className="w-12 h-12 animate-spin mb-4 text-primary" />
-          <h3 className="text-xl font-bold mb-1">Processando Lista...</h3>
-          <p className="text-white/70 text-sm mb-4">
-            {processingStatus.currentItemName
-              ? `Importando: ${processingStatus.currentItemName.substring(0, 25)}...`
-              : "Aguarde..."}
-          </p>
-          <div className="w-64 h-2 bg-white/10 rounded-full overflow-hidden">
-            <div
-              className="h-full bg-primary transition-all duration-300"
-              style={{
-                width: `${(processingStatus.current / processingStatus.total) * 100
-                  }%`,
-              }}
-            />
-          </div>
-          <p className="mt-2 text-xs text-white/50">
-            {processingStatus.current} de {processingStatus.total} itens
-          </p>
-        </div>
-      )}
-
-      <input
-        type="file"
-        accept="image/*"
-        capture="environment"
-        className="hidden"
-        ref={fileInputRef}
-        onChange={handleFileUpload}
-      />
-
-      {/* QR Scanner Overlay */}
-      {isQRScanning && (
-        <div className="fixed inset-0 z-50 bg-black flex flex-col">
-          <div className="p-4 flex justify-between items-center text-white bg-black/50 absolute top-0 w-full z-10">
-            <h3 className="font-bold">Aponte para o QR Code</h3>
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => setIsQRScanning(false)}
-              className="text-white hover:bg-white/20"
-            >
-              <X className="w-6 h-6" />
-            </Button>
-          </div>
-
-          <div className="flex-1 flex items-center justify-center relative bg-black">
-            <Scanner
-              onScan={(result) => {
-                if (result && result.length > 0 && result[0].rawValue) {
-                  handleQRScan(result[0].rawValue);
-                }
-              }}
-              onError={(error) => {
-                console.error("Scanner error:", error);
-              }}
-              constraints={{ facingMode: "environment" }}
-              formats={["qr_code"]}
-              components={{
-                audio: false,
-                onOff: true,
-              }}
-              styles={{
-                container: { width: "100%", height: "100%" },
-              }}
-            />
-          </div>
-        </div>
-      )}
-
+    <div className={cn("min-h-screen bg-background transition-all", items.length > 0 ? "pb-48" : "pb-20")}>
       <header className="sticky top-0 z-40 bg-background/90 backdrop-blur-lg border-b border-border transition-all">
         <div className="flex items-center gap-2 px-4 py-3 max-w-md mx-auto">
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => (isCompareMode ? navigate(-1) : navigate("/listas"))} // CORREÇÃO: Volta para /listas (Index)
-            className="h-10 w-10 -ml-2 shrink-0"
-          >
+          <Button variant="ghost" size="icon" onClick={() => isCompareMode ? navigate(-1) : navigate("/listas")} className="h-10 w-10 -ml-2 shrink-0">
             <ArrowLeft className="w-5 h-5" />
           </Button>
-
           <div className="flex-1 min-w-0 flex flex-col justify-center h-10">
             <div className="flex items-center gap-1.5">
-              <h1 className="text-base font-display font-bold text-foreground truncate">
-                {list.name}
-              </h1>
-              {isClosed && (
-                <Lock className="w-3 h-3 text-muted-foreground shrink-0" />
-              )}
+              <h1 className="text-base font-display font-bold text-foreground truncate">{list.name}</h1>
+              {list.is_public && <Globe className="w-3 h-3 text-indigo-500" />}
+              {!isOwner && <Lock className="w-3 h-3 text-muted-foreground" />}
             </div>
-
-            <p className="text-xs text-muted-foreground truncate leading-none mt-0.5">
-              {isClosed
-                ? totalPrice > 0
-                  ? `Total: R$ ${totalPrice.toFixed(2)}`
-                  : "Fechada"
-                : isShoppingMode
-                  ? `${checkedCount}/${items.length} • R$ ${totalPrice.toFixed(2)}`
-                  : isCompareMode
-                    ? `Simulação • R$ ${totalPrice.toFixed(2)}`
-                    : `${items.length} ${items.length === 1 ? "item" : "itens"}`}
+            <p className="text-xs text-muted-foreground truncate mt-0.5">
+              {(isShoppingMode || isCompareMode) && selectedMarket ?
+                <span className={cn("font-bold flex items-center gap-1", isCompareMode ? "text-indigo-600" : "text-green-600")}>
+                  <Store className="w-3 h-3" /> {isCompareMode ? `Preços em ${selectedMarket.name}` : `Comprando em ${selectedMarket.name}`}
+                </span> :
+                isOwner ? `${items.length} itens • ${list.forks_count || 0} cópias` : `Modo Leitura`
+              }
             </p>
           </div>
-
           <div className="flex items-center gap-1 shrink-0">
-            {!isCompareMode && (
+            {isOwner && !isCompareMode && (
               <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button variant="ghost" size="icon" className="h-9 w-9">
-                    <MoreVertical className="w-5 h-5 text-muted-foreground" />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="w-48 rounded-xl">
-                  <DropdownMenuItem onClick={() => setEditNameDialogOpen(true)}>
-                    <Pencil className="w-4 h-4 mr-2" />
-                    Editar Nome
-                  </DropdownMenuItem>
+                <DropdownMenuTrigger asChild><Button variant="ghost" size="icon" className="h-9 w-9"><MoreVertical className="w-5 h-5 text-muted-foreground" /></Button></DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-56 rounded-xl">
+                  <div className="px-2 py-2 flex items-center justify-between"><Label className="text-xs font-semibold">Lista Pública</Label><Switch checked={list.is_public} onCheckedChange={handleTogglePublic} /></div>
                   <DropdownMenuSeparator />
-                  <DropdownMenuItem
-                    onClick={() => setDeleteListDialogOpen(true)}
-                    className="text-destructive focus:text-destructive"
-                  >
-                    <Trash2 className="w-4 h-4 mr-2" />
-                    Excluir Lista
-                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => setEditNameDialogOpen(true)}><Pencil className="w-4 h-4 mr-2" /> Renomear</DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => { navigator.clipboard.writeText(window.location.href); toast({ title: "Link copiado!" }); }}><Share2 className="w-4 h-4 mr-2" /> Compartilhar</DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem onClick={() => setDeleteListDialogOpen(true)} className="text-destructive"><Trash2 className="w-4 h-4 mr-2" /> Excluir Lista</DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
             )}
-
             <AppMenu />
           </div>
         </div>
-
-        {(isShoppingMode || isCompareMode || (isClosed && selectedMarket)) && selectedMarket && (
-          <div className="px-4 pb-3 max-w-md mx-auto">
-            <div
-              className={cn(
-                "flex items-center gap-2 p-2 rounded-lg text-xs sm:text-sm border",
-                isClosed
-                  ? "bg-muted text-muted-foreground border-border"
-                  : isCompareMode
-                    ? "bg-secondary text-secondary-foreground border-secondary"
-                    : "bg-primary/10 text-primary border-primary/20"
-              )}
-            >
-              <Store className="w-3.5 h-3.5 shrink-0" />
-              <span className="font-medium truncate">
-                {isClosed
-                  ? `Comprado: ${selectedMarket.name}`
-                  : isCompareMode
-                    ? `Preços: ${selectedMarket.name}`
-                    : `No mercado: ${selectedMarket.name}`}
-              </span>
-            </div>
+        {!isOwner && !isCompareMode && (
+          <div className="bg-indigo-50 px-4 py-3 flex items-center justify-between border-b border-indigo-100 animate-in slide-in-from-top-2">
+            <div className="flex items-center gap-2 text-indigo-700 text-sm font-medium"><Sparkles className="w-4 h-4 fill-indigo-200" /><span>Gostou dessa lista?</span></div>
+            <Button size="sm" onClick={handleCloneList} disabled={duplicating} className="bg-indigo-600 hover:bg-indigo-700 text-white h-8 rounded-lg shadow-sm">{duplicating ? <Loader2 className="w-3 h-3 animate-spin" /> : <><Copy className="w-3 h-3 mr-1.5" /> Copiar para mim</>}</Button>
+          </div>
+        )}
+        {totalPrice > 0 && (
+          <div className={cn("px-4 py-2 text-center border-b backdrop-blur-sm transition-colors", isCompareMode ? "bg-indigo-50/80 border-indigo-100" : "bg-green-50/80 border-green-100")}>
+            <span className={cn("text-xs font-bold uppercase tracking-wider", isCompareMode ? "text-indigo-700" : "text-green-700")}>Total Estimado</span>
+            <p className={cn("text-lg font-bold", isCompareMode ? "text-indigo-800" : "text-green-800")}>R$ {totalPrice.toFixed(2)}</p>
           </div>
         )}
       </header>
 
       <main className="px-4 py-4 max-w-md mx-auto">
-        {!isShoppingMode && !isClosed && !isCompareMode && items.length > 0 && (
+        {!isShoppingMode && !isCompareMode && !isClosed && isOwner && items.length > 0 && (
           <div className="mb-6 animate-fade-in">
-            <p className="text-sm text-muted-foreground mb-2 ml-1">
-              Onde você vai fazer as compras?
-            </p>
-            <MarketSelector
-              selectedMarket={selectedMarket}
-              onSelectMarket={setSelectedMarket}
-            />
+            <p className="text-sm text-muted-foreground mb-2 ml-1">Onde você vai fazer as compras?</p>
+            <MarketSelector selectedMarket={selectedMarket} onSelectMarket={setSelectedMarket} />
           </div>
         )}
-
         {items.length === 0 ? (
-          <EmptyState
-            icon={<Sparkles className="w-10 h-10 text-primary" />}
-            title="Sua lista inteligente"
-            description="Use a barra abaixo para digitar ou falar os itens que você precisa (ex: Arroz, Feijão e Batata)."
-            action={null} // REMOVIDOS BOTÕES DE AÇÃO EXTRA
-          />
+          <EmptyState icon={<Sparkles className="w-10 h-10 text-primary" />} title={isOwner ? "Sua lista está vazia" : "Lista vazia"} description="Adicione itens." action={null} />
         ) : (
-          <div className={cn("space-y-3", (isClosed || isCompareMode) && "opacity-95")}>
-            {/* CAMPO DE BUSCA DA LISTA */}
+          <div className={cn("space-y-3", (!isOwner && !isCompareMode) && "opacity-90")}>
             {items.length > 5 && (
               <div className="relative mb-4">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                <Input
-                  placeholder="Buscar na lista..."
-                  className="pl-9 pr-9 h-10 rounded-xl bg-secondary/30 border-transparent focus:bg-background"
-                  value={listFilter}
-                  onChange={(e) => setListFilter(e.target.value)}
-                />
-                {listFilter && (
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="absolute right-1 top-1/2 -translate-y-1/2 h-8 w-8 hover:bg-transparent text-muted-foreground"
-                    onClick={() => setListFilter("")}
-                  >
-                    <X className="w-4 h-4" />
-                  </Button>
-                )}
+                <Input placeholder="Buscar na lista..." className="pl-9 pr-9 h-10 rounded-xl bg-secondary/30 border-transparent focus:bg-background" value={listFilter} onChange={(e) => setListFilter(e.target.value)} />
+                {listFilter && <Button variant="ghost" size="icon" className="absolute right-1 top-1/2 -translate-y-1/2 h-8 w-8 hover:bg-transparent text-muted-foreground" onClick={() => setListFilter("")}><X className="w-4 h-4" /></Button>}
               </div>
             )}
 
             {filteredListItems.map((item) => {
               const match = isCompareMode ? smartMatches[item.id] : null;
               const displayName = match ? match.matchedProductName : item.products.name;
-              const displayBrand = match
-                ? (match.matchedProductBrand || "")
-                : (item.products.brand || "");
-
+              const displayBrand = match ? (match.matchedProductBrand || "") : (item.products.brand || "");
               return (
                 <div key={item.id} className="flex flex-col mb-2">
                   <div className="relative z-10">
-                    {/* AQUI REMOVI A TAG DE ECONOMIA VISUALMENTE */}
-                    <ProductItem
-                      id={item.id}
-                      name={displayName}
-                      brand={displayBrand}
-                      measurement={item.products.measurement}
-                      quantity={item.quantity}
-                      isChecked={item.is_checked}
-                      price={itemPrices[item.id]}
-                      showPriceInput={isShoppingMode && !isClosed && !isCompareMode}
-                      readonly={isClosed || isCompareMode}
-                      isSimpleMode={isSimpleMode} // Passa o novo modo
-                      onToggleCheck={toggleCheck}
-                      onUpdateQuantity={updateQuantity}
-                      onUpdatePrice={updatePrice}
-                      onUpdateBrand={updateProductBrand} // Passa função de atualizar marca
-                      onRemove={removeItem}
-                    />
+                    <ProductItem id={item.id} name={displayName} brand={displayBrand} measurement={item.products.measurement} quantity={item.quantity} isChecked={item.is_checked} price={itemPrices[item.id] || 0} showPriceInput={isShoppingMode} readonly={(!isOwner && !isShoppingMode) || isCompareMode} isSimpleMode={isSimpleMode} onToggleCheck={toggleCheck} onUpdateQuantity={() => { }} onUpdatePrice={updatePrice} onUpdateBrand={() => { }} onRemove={removeItem} />
                   </div>
-
-                  {isCompareMode && match?.isSubstitution && (
-                    <div className="-mt-3 pt-4 pb-1.5 px-3 bg-indigo-50 border-x border-b border-indigo-100 rounded-b-xl mx-1 text-[10px] text-indigo-700 flex justify-end items-center gap-1.5 shadow-sm overflow-hidden">
-                      <span className="text-indigo-400 shrink-0">Substituiu:</span>
-                      <span className="font-medium truncate max-w-[140px] sm:max-w-[200px] min-w-0">
-                        {item.products.name}
-                      </span>
-                    </div>
-                  )}
                 </div>
               );
             })}
@@ -1782,372 +686,134 @@ export default function ListDetail() {
         )}
       </main>
 
-      {/* --- NOVA BARRA DE CHAT/ADICIONAR --- */}
-      {!isClosed && !isCompareMode && !isShoppingMode && (
+      {isOwner && !isShoppingMode && !isCompareMode && !isClosed && (
         <div className="fixed bottom-0 left-0 right-0 p-3 bg-background border-t border-border z-50 safe-bottom">
-          <div className="max-w-md mx-auto flex gap-2 items-center">
-            <Button
-              variant={isListening ? "destructive" : "secondary"}
-              size="icon"
-              className={cn(
-                "h-12 w-12 rounded-full shrink-0 shadow-sm transition-all",
-                isListening && "animate-pulse ring-4 ring-destructive/30"
-              )}
-              onClick={toggleListening}
-            >
-              {isListening ? <StopCircle className="w-6 h-6" /> : <Mic className="w-6 h-6" />}
-            </Button>
-
-            <div className="flex-1 relative">
-              <Input
-                placeholder={isListening ? "Ouvindo..." : "Escreva: Arroz, Feijão..."}
-                value={chatInput}
-                onChange={(e) => setChatInput(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()}
-                className="h-12 rounded-full pl-5 pr-12 shadow-sm bg-secondary/20 border-transparent focus:bg-background focus:border-primary"
-                disabled={isProcessingChat}
-              />
-              <Button
-                size="icon"
-                className="absolute right-1 top-1/2 -translate-y-1/2 h-10 w-10 rounded-full"
-                onClick={handleSendMessage}
-                disabled={!chatInput.trim() || isProcessingChat}
-              >
-                {isProcessingChat ? (
-                  <Loader2 className="w-5 h-5 animate-spin" />
-                ) : (
-                  <Send className="w-5 h-5" />
-                )}
-              </Button>
-            </div>
-          </div>
-
-          {/* Botões de Ação Secundários (Iniciar/Comparar) */}
-          {items.length > 0 && (
-            <div className="max-w-md mx-auto grid grid-cols-2 gap-3 mt-3">
-              <Button
-                onClick={() => navigate(`/comparar/${id}`)}
-                variant="outline"
-                className="h-12 rounded-xl border-border bg-background"
-              >
-                <Scale className="w-5 h-5 mr-2" />
-                Comparar
-              </Button>
-              <Button
-                onClick={startShopping}
-                className="h-12 rounded-xl shadow-lg shadow-primary/20"
-                disabled={!selectedMarket || startingShopping}
-              >
-                {startingShopping ? (
-                  <Loader2 className="w-5 h-5 animate-spin" />
-                ) : (
-                  <>
-                    <ShoppingCart className="w-5 h-5 mr-2" />
-                    Iniciar
-                  </>
-                )}
-              </Button>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* FOOTER P/ MODOS ESPECIAIS (SHOPPING/COMPARE) */}
-      {(isShoppingMode || isCompareMode || isClosed) && items.length > 0 && (
-        <div className="fixed bottom-0 left-0 right-0 p-4 bg-background/80 backdrop-blur-xl border-t border-border z-30 safe-bottom">
-          <div className="max-w-md mx-auto space-y-3">
-            {isClosed ? (
-              <Button
-                onClick={() => setDuplicateDialogOpen(true)}
-                className="w-full h-14 rounded-xl text-lg font-medium shadow-lg shadow-primary/20"
-                size="lg"
-              >
-                <Copy className="w-5 h-5 mr-2" />
-                Utilizar Novamente
-              </Button>
-            ) : isCompareMode ? (
-              <div className="flex gap-3">
-                <Button
-                  onClick={() => navigate(-1)}
-                  variant="outline"
-                  className="flex-1 h-14 rounded-xl"
-                >
-                  <ArrowLeft className="w-5 h-5 mr-2" />
-                  Voltar
-                </Button>
-                <Button
-                  onClick={startShopping}
-                  className="flex-1 h-14 rounded-xl shadow-lg shadow-primary/20"
-                  disabled={startingShopping}
-                >
-                  {startingShopping ? (
-                    <Loader2 className="w-5 h-5 animate-spin" />
-                  ) : (
-                    <>
-                      <ShoppingCart className="w-5 h-5 mr-2" />
-                      Usar essa lista
-                    </>
-                  )}
-                </Button>
+          <div className="max-w-md mx-auto">
+            <div className="flex gap-2 items-center mb-3">
+              <Button variant={isListening ? "destructive" : "secondary"} size="icon" className={cn("h-12 w-12 rounded-full shrink-0 shadow-sm", isListening && "animate-pulse")} onClick={toggleListening}>{isListening ? <StopCircle className="w-6 h-6" /> : <Mic className="w-6 h-6" />}</Button>
+              <div className="flex-1 relative">
+                <Input placeholder={isListening ? "Ouvindo..." : "Adicionar..."} value={chatInput} onChange={(e) => setChatInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()} className="h-12 rounded-full pl-5 pr-12 bg-secondary/20" disabled={isProcessingChat} />
+                <Button size="icon" className="absolute right-1 top-1/2 -translate-y-1/2 h-10 w-10 rounded-full" onClick={handleSendMessage} disabled={!chatInput.trim() || isProcessingChat}>{isProcessingChat ? <Loader2 className="w-5 h-5 animate-spin" /> : <Send className="w-5 h-5" />}</Button>
               </div>
-            ) : (
-              // MODO SHOPPING ATIVO
-              <div className="flex gap-3">
-                <Button
-                  onClick={cancelShopping}
-                  variant="outline"
-                  className="w-14 shrink-0 h-14 rounded-xl"
-                  title="Cancelar"
-                >
-                  <X className="w-5 h-5" />
-                </Button>
-                <Button
-                  onClick={() => setFinishDialogOpen(true)}
-                  className="flex-1 h-14 rounded-xl shadow-lg shadow-primary/20"
-                >
-                  <Check className="w-5 h-5 mr-2" />
-                  Finalizar
-                </Button>
+            </div>
+            {items.length > 0 && (
+              <div className="grid grid-cols-2 gap-3">
+                <Button onClick={() => navigate(`/comparar/${id}`)} variant="outline" className="h-12 rounded-xl"><Scale className="w-5 h-5 mr-2" /> Comparar</Button>
+                <Button onClick={startShopping} className="h-12 rounded-xl shadow-lg" disabled={!selectedMarket || startingShopping}>{startingShopping ? <Loader2 className="w-5 h-5 animate-spin" /> : <><ShoppingCart className="w-5 h-5 mr-2" /> Iniciar</>}</Button>
               </div>
             )}
           </div>
         </div>
       )}
 
-      {/* DIALOGS MANTIDOS (Renomear, Deletar, Duplicar, Confirmar Update, etc) */}
-      <Dialog open={editNameDialogOpen} onOpenChange={setEditNameDialogOpen}>
-        <DialogContent className="w-[90%] max-w-sm mx-auto rounded-2xl p-6">
-          <DialogHeader>
-            <DialogTitle className="font-display text-xl text-center">Editar Nome</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-4 mt-2">
-            <Input
-              value={editingName}
-              onChange={(e) => setEditingName(e.target.value)}
-              className="h-12 rounded-xl text-base"
-            />
-            <Button onClick={updateListName} className="w-full h-12 rounded-xl">Salvar</Button>
+      {isCompareMode && items.length > 0 && (
+        <div className="fixed bottom-0 left-0 right-0 p-4 bg-background/95 backdrop-blur-xl border-t border-border z-50 safe-bottom">
+          <div className="max-w-md mx-auto flex gap-3">
+            <Button onClick={() => navigate(-1)} variant="outline" className="flex-1 h-14 rounded-xl"><ArrowLeft className="w-5 h-5 mr-2" /> Voltar</Button>
+            <Button onClick={startShopping} className="flex-1 h-14 rounded-xl shadow-lg shadow-indigo-200 bg-indigo-600 hover:bg-indigo-700 text-white" disabled={startingShopping}>
+              {startingShopping ? <Loader2 className="w-5 h-5 animate-spin" /> : <><ShoppingCart className="w-5 h-5 mr-2" /> Usar essa lista</>}
+            </Button>
           </div>
+        </div>
+      )}
+
+      {isShoppingMode && !isClosed && (
+        <div className="fixed bottom-0 left-0 right-0 p-4 bg-background border-t border-border z-50 safe-bottom">
+          <div className="max-w-md mx-auto flex gap-3">
+            <Button variant="outline" onClick={cancelShopping} className="w-14 h-14 rounded-xl shrink-0"><X className="w-6 h-6" /></Button>
+            <Button onClick={() => setFinishDialogOpen(true)} className="flex-1 h-14 rounded-xl bg-green-600 hover:bg-green-700 text-white shadow-lg shadow-green-200"><Check className="w-5 h-5 mr-2" /> Finalizar & Ganhar Pontos</Button>
+          </div>
+        </div>
+      )}
+
+      {isClosed && (
+        <div className="fixed bottom-0 left-0 right-0 p-4 bg-background border-t border-border z-50 safe-bottom">
+          <div className="max-w-md mx-auto">
+            <Button onClick={() => setDuplicateDialogOpen(true)} className="w-full h-14 rounded-xl text-lg font-medium shadow-lg" size="lg"><Copy className="w-5 h-5 mr-2" /> Utilizar Novamente</Button>
+          </div>
+        </div>
+      )}
+
+      <Dialog open={editNameDialogOpen} onOpenChange={setEditNameDialogOpen}>
+        <DialogContent className="w-[90%] max-w-sm rounded-2xl p-6">
+          <DialogHeader>
+            <DialogTitle>Renomear</DialogTitle>
+            <DialogDescription className="sr-only">Altere o nome da sua lista</DialogDescription>
+          </DialogHeader>
+          <Input value={editingName} onChange={(e) => setEditingName(e.target.value)} className="h-12 rounded-xl" />
+          <Button onClick={updateListName} className="w-full h-12 rounded-xl mt-2">Salvar</Button>
         </DialogContent>
       </Dialog>
 
       <AlertDialog open={deleteListDialogOpen} onOpenChange={setDeleteListDialogOpen}>
-        <AlertDialogContent className="w-[90%] max-w-sm mx-auto rounded-2xl p-6">
-          <AlertDialogHeader><AlertDialogTitle>Excluir Lista?</AlertDialogTitle></AlertDialogHeader>
-          <AlertDialogFooter className="flex-row gap-2">
+        <AlertDialogContent className="w-[90%] max-w-sm rounded-2xl p-6">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Excluir?</AlertDialogTitle>
+            <AlertDialogDescription>Essa ação não pode ser desfeita.</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter className="flex gap-2">
             <AlertDialogCancel className="flex-1 mt-0">Cancelar</AlertDialogCancel>
             <AlertDialogAction onClick={deleteList} className="flex-1 bg-destructive">Excluir</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
 
-      <Dialog open={duplicateDialogOpen} onOpenChange={setDuplicateDialogOpen}>
-        <DialogContent className="w-[90%] max-w-sm mx-auto rounded-2xl p-6">
-          <DialogHeader><DialogTitle>Duplicar Lista</DialogTitle></DialogHeader>
-          <Input value={newListName} onChange={e => setNewListName(e.target.value)} className="h-12" />
-          <Button onClick={duplicateList} className="w-full h-12">Confirmar</Button>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={addDialogOpen} onOpenChange={closeAddDialog}>
-        <DialogContent className="w-[95%] max-w-sm mx-auto rounded-2xl h-[85vh] p-0 gap-0 overflow-hidden flex flex-col">
-          {isProductMode ? (
-            <>
-              <DialogHeader className="p-4 pb-2 border-b border-border/50 bg-background z-10">
-                <DialogTitle className="font-display text-xl flex items-center gap-2">
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-8 w-8 -ml-2"
-                    onClick={() => setIsProductMode(null)}
-                  >
-                    <ArrowLeft className="w-5 h-5" />
-                  </Button>
-                  {isProductMode === "create"
-                    ? "Novo Produto"
-                    : "Editar Produto"}
-                </DialogTitle>
-              </DialogHeader>
-              <div className="p-4 space-y-4 flex-1 bg-background">
-                <div className="bg-primary/5 p-3 rounded-lg flex gap-3 text-sm text-primary/80 mb-2">
-                  <AlertTriangle className="w-5 h-5 shrink-0" />
-                  <p>
-                    Atenção: As alterações aqui são globais e afetam a busca de
-                    todos os usuários.
-                  </p>
-                </div>
-
-                <div className="space-y-2">
-                  <Label>Nome do Produto</Label>
-                  <Input
-                    value={editingProductData.name}
-                    onChange={(e) =>
-                      setEditingProductData((prev) => ({
-                        ...prev,
-                        name: e.target.value,
-                      }))
-                    }
-                    placeholder="Ex: Arroz Branco"
-                    className="h-12 rounded-xl"
-                  />
-                  <p className="text-xs text-muted-foreground">
-                    O sistema corrigirá automaticamente a ortografia.
-                  </p>
-                </div>
-                <div className="space-y-2">
-                  <Label>Marca (Opcional)</Label>
-                  <Input
-                    value={editingProductData.brand}
-                    onChange={(e) =>
-                      setEditingProductData((prev) => ({
-                        ...prev,
-                        brand: e.target.value,
-                      }))
-                    }
-                    placeholder="Ex: Tio João"
-                    className="h-12 rounded-xl"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label>Medida (Ex: 500g, 1L)</Label>
-                  <Input
-                    value={editingProductData.measurement}
-                    onChange={(e) =>
-                      setEditingProductData((prev) => ({
-                        ...prev,
-                        measurement: e.target.value,
-                      }))
-                    }
-                    placeholder="Ex: 500g"
-                    className="h-12 rounded-xl"
-                  />
-                </div>
-              </div>
-              <div className="p-4 border-t border-border bg-background z-10">
-                <Button
-                  onClick={handleCreateOrUpdateProduct}
-                  className="w-full h-14 rounded-xl text-lg font-medium shadow-md"
-                  disabled={
-                    !editingProductData.name.trim() || validatingProduct
-                  }
-                >
-                  {validatingProduct ? (
-                    <>
-                      <Loader2 className="w-5 h-5 animate-spin mr-2" />
-                      Validando...
-                    </>
-                  ) : (
-                    <>
-                      <Save className="w-5 h-5 mr-2" /> Salvar Produto
-                    </>
-                  )}
-                </Button>
-              </div>
-            </>
-          ) : (
-            <>
-              <DialogHeader className="p-4 pb-2 border-b border-border/50 bg-background z-10">
-                <DialogTitle className="font-display text-xl">
-                  Adicionar Produtos
-                  {selectedProducts.size > 0 && (
-                    <span className="ml-2 text-sm font-normal text-primary bg-primary/10 px-2 py-0.5 rounded-full">
-                      {selectedProducts.size}
-                    </span>
-                  )}
-                </DialogTitle>
-              </DialogHeader>
-              <div className="p-4 pb-2 bg-background z-10 space-y-3">
-                {id && (
-                  <div className="w-full">
-                    <MagicPasteImport
-                      listId={id}
-                      onSuccess={() => {
-                        fetchListData();
-                        setAddDialogOpen(false);
-                      }}
-                    />
-                  </div>
-                )}
-                <div className="relative">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground" />
-                  <Input
-                    placeholder="Buscar produto..."
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    className="pl-10 h-12 rounded-xl bg-secondary/50 border-transparent focus:bg-background focus:border-primary transition-all"
-                  />
-                </div>
-              </div>
-              {/* Conteúdo do modal de busca manual mantido funcional */}
-              <div className="p-8 text-center text-muted-foreground">
-                Use o chat na tela anterior para maior agilidade, ou busque aqui.
-                <Button onClick={startCreateProduct} variant="outline" className="mt-4 w-full">Criar Novo</Button>
-              </div>
-            </>
-          )}
-        </DialogContent>
-      </Dialog>
-
       <AlertDialog open={finishDialogOpen} onOpenChange={setFinishDialogOpen}>
-        <AlertDialogContent className="w-[90%] max-w-sm mx-auto rounded-2xl p-6">
+        <AlertDialogContent className="w-[90%] max-w-sm rounded-2xl p-6">
           <AlertDialogHeader>
-            <AlertDialogTitle className="font-display text-xl">Finalizar Compra</AlertDialogTitle>
-            <AlertDialogDescription>
-              <div className="space-y-3 mt-2">
-                <p>
-                  Os preços informados serão salvos e a lista será{" "}
-                  <strong>fechada</strong>.
-                </p>
-                <div className="bg-muted/50 p-4 rounded-xl border border-border/50">
-                  <p className="text-2xl font-bold text-foreground text-center">
-                    R$ {totalPrice.toFixed(2)}
-                  </p>
-                  <p className="text-sm text-muted-foreground text-center mt-1">
-                    {
-                      Object.keys(itemPrices).filter((k) => itemPrices[k] > 0)
-                        .length
-                    }{" "}
-                    produtos com preço
-                  </p>
-                </div>
-              </div>
-            </AlertDialogDescription>
+            <AlertDialogTitle>Finalizar Compra?</AlertDialogTitle>
+            <AlertDialogDescription>Isso vai fechar a lista e gerar seus pontos.</AlertDialogDescription>
           </AlertDialogHeader>
-          <AlertDialogFooter className="flex-row gap-2">
-            <AlertDialogCancel className="flex-1 mt-0">Voltar</AlertDialogCancel>
-            <AlertDialogAction onClick={finishShopping} className="flex-1">Finalizar</AlertDialogAction>
+          <AlertDialogFooter className="flex gap-2 mt-4">
+            <AlertDialogCancel className="flex-1 mt-0 h-12 rounded-xl">Voltar</AlertDialogCancel>
+            <AlertDialogAction onClick={finishShopping} className="flex-1 h-12 rounded-xl bg-green-600">Finalizar</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
 
       <AlertDialog open={confirmUpdateDialogOpen} onOpenChange={setConfirmUpdateDialogOpen}>
-        <AlertDialogContent className="w-[90%] max-w-sm mx-auto rounded-2xl p-6">
+        <AlertDialogContent className="w-[90%] max-w-sm rounded-2xl p-6">
           <AlertDialogHeader>
-            <AlertDialogTitle className="font-display text-xl text-primary flex items-center gap-2">
-              <Sparkles className="w-5 h-5" />
-              Economia Inteligente
-            </AlertDialogTitle>
-            <AlertDialogDescription className="space-y-3 pt-2">
-              <p>Para garantir o preço total estimado, atualizaremos sua lista com as opções mais baratas encontradas neste mercado:</p>
-              <div className="bg-muted/50 rounded-xl p-3 max-h-[40vh] overflow-y-auto space-y-3 text-sm">
-                {substitutionsList.map((sub, idx) => (
-                  <div key={idx} className="grid grid-cols-[1fr_auto_1fr] gap-2 items-center border-b border-border/50 pb-2 last:border-0 last:pb-0">
-                    <span className="text-muted-foreground line-through text-xs break-words">{sub.original}</span>
-                    <ArrowRight className="w-3 h-3 text-muted-foreground shrink-0 mx-auto" />
-                    <span className="font-medium text-foreground text-right text-xs break-words">{sub.new}</span>
-                  </div>
-                ))}
-              </div>
+            <AlertDialogTitle className="flex items-center gap-2"><Sparkles className="w-5 h-5 text-indigo-600" /> Atualizar Lista?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Para garantir o preço estimado, vamos atualizar sua lista para usar as marcas encontradas neste mercado.
             </AlertDialogDescription>
           </AlertDialogHeader>
-          <AlertDialogFooter className="flex-row gap-3 space-x-0 mt-4">
-            <AlertDialogCancel disabled={startingShopping} className="flex-1 h-12 rounded-xl mt-0">Cancelar</AlertDialogCancel>
-            <AlertDialogAction onClick={proceedToStartShopping} disabled={startingShopping} className="flex-1 h-12 rounded-xl">Atualizar e Iniciar</AlertDialogAction>
+          <AlertDialogFooter className="flex gap-2 mt-4">
+            <AlertDialogCancel className="flex-1 mt-0 h-12 rounded-xl">Cancelar</AlertDialogCancel>
+            <AlertDialogAction onClick={proceedToStartShopping} className="flex-1 h-12 rounded-xl bg-indigo-600">Aceitar e Iniciar</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
 
-      <ReceiptReconciliation open={showReconciliation} onOpenChange={setShowReconciliation} scanResult={scanResult} currentItems={items.map((i) => ({ id: i.id, name: i.products.name, brand: i.products.brand }))} onConfirm={handleReconciliationConfirm} />
+      <Dialog open={duplicateDialogOpen} onOpenChange={setDuplicateDialogOpen}>
+        <DialogContent className="w-[90%] max-w-sm rounded-2xl p-6">
+          <DialogHeader>
+            <DialogTitle>Duplicar Lista</DialogTitle>
+            <DialogDescription className="sr-only">Crie uma cópia da sua lista</DialogDescription>
+          </DialogHeader>
+          <Input value={newListName} onChange={(e) => setNewListName(e.target.value)} className="h-12 rounded-xl" />
+          <Button onClick={handleCloneList} className="w-full h-12 rounded-xl mt-2" disabled={duplicating}>
+            {duplicating ? <Loader2 className="w-4 h-4 animate-spin" /> : "Confirmar"}
+          </Button>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={addDialogOpen} onOpenChange={closeAddDialog}>
+        <DialogContent className="w-[95%] max-w-sm mx-auto rounded-2xl h-[85vh] p-0 gap-0 overflow-hidden flex flex-col">
+          <DialogHeader className="p-4 pb-2 border-b border-border/50 bg-background z-10">
+            <DialogTitle className="font-display text-xl">Adicionar Produtos</DialogTitle>
+            <DialogDescription className="sr-only">Busque ou adicione produtos à sua lista</DialogDescription>
+          </DialogHeader>
+          <div className="p-4 pb-2 bg-background z-10 space-y-3">
+            <div className="w-full"><MagicPasteImport listId={id!} onSuccess={() => { fetchListData(); setAddDialogOpen(false); }} /></div>
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground" />
+              <Input placeholder="Buscar produto..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="pl-10 h-12 rounded-xl bg-secondary/50 border-transparent focus:bg-background focus:border-primary transition-all" />
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

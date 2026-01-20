@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Plus, ShoppingBag, Loader2, ArrowLeft } from "lucide-react";
+import { Plus, ShoppingBag, Loader2, ArrowLeft, Target, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { AppMenu } from "@/components/AppMenu";
 import { ListCard } from "@/components/ListCard";
@@ -35,6 +35,9 @@ export default function Index() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [creating, setCreating] = useState(false);
 
+  // Estado para missões
+  const [activeMissionsCount, setActiveMissionsCount] = useState(0);
+
   useEffect(() => {
     if (!authLoading && !user) {
       navigate("/auth");
@@ -44,15 +47,24 @@ export default function Index() {
   useEffect(() => {
     if (user) {
       fetchLists();
+      checkActiveMissions();
     }
   }, [user]);
+
+  const checkActiveMissions = async () => {
+    const { count } = await supabase
+      .from('missions')
+      .select('*', { count: 'exact', head: true })
+      .eq('is_active', true);
+
+    if (count) setActiveMissionsCount(count);
+  };
 
   const fetchLists = async () => {
     if (!user) return;
 
     setLoading(true);
     try {
-      // 1. Busca todas as listas de uma vez
       const { data: listsData, error: listsError } = await supabase
         .from("shopping_lists")
         .select("*")
@@ -67,8 +79,6 @@ export default function Index() {
         return;
       }
 
-      // 2. OTIMIZAÇÃO DE PERFORMANCE (Batch Request)
-      // Em vez de chamar o banco N vezes, pegamos todos os IDs e buscamos os itens em 1 chamada.
       const listIds = listsData.map((l) => l.id);
 
       const { data: allItems, error: itemsError } = await supabase
@@ -78,8 +88,6 @@ export default function Index() {
 
       if (itemsError) throw itemsError;
 
-      // 3. Agregação em Memória (Instantâneo)
-      // Cria um mapa de contagem: { 'list_id_1': 5, 'list_id_2': 10 }
       const counts: Record<string, number> = {};
       allItems?.forEach((item) => {
         counts[item.list_id] = (counts[item.list_id] || 0) + 1;
@@ -122,8 +130,6 @@ export default function Index() {
 
       setNewListName("");
       setDialogOpen(false);
-
-      // Navega direto para a nova lista para inserir produtos
       navigate(`/lista/${data.id}`);
 
     } catch (error) {
