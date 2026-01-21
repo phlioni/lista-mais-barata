@@ -15,6 +15,7 @@ import NotFound from "./pages/NotFound";
 import Compare from "./pages/Compare";
 import Community from "./pages/Community";
 import Gamification from "./pages/Gamification";
+import Arenas from "./pages/Arenas";
 
 const queryClient = new QueryClient();
 
@@ -41,6 +42,8 @@ const App = () => (
             <Route path="/comparar/:id" element={<Compare />} />
 
             <Route path="/comunidade" element={<Community />} />
+
+            <Route path="/arenas" element={<Arenas />} />
 
             <Route path="*" element={<NotFound />} />
           </Routes>
