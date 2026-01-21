@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { useNavigate } from "react-router-dom";
+import { GoogleMap, useJsApiLoader, OverlayView } from "@react-google-maps/api";
 import {
     Trophy,
     Target,
@@ -8,12 +9,20 @@ import {
     Gift,
     MapPin,
     ChevronRight,
-    Star,
     ShieldAlert,
     TrendingUp,
     AlertTriangle,
     Crown,
-    X
+    X,
+    Info,
+    Swords,
+    Radar,
+    ListChecks,
+    User,
+    Ghost,
+    Crosshair,
+    Shield,
+    ShoppingBasket
 } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Card, CardContent } from "@/components/ui/card";
@@ -29,7 +38,14 @@ import {
     DialogContent,
     DialogHeader,
     DialogTitle,
+    DialogTrigger,
 } from "@/components/ui/dialog";
+import {
+    Sheet,
+    SheetContent,
+    SheetHeader,
+    SheetTitle,
+} from "@/components/ui/sheet";
 import {
     Table,
     TableBody,
@@ -38,6 +54,38 @@ import {
     TableHeader,
     TableRow,
 } from "@/components/ui/table";
+
+// --- CONFIGURAÇÃO DO MAPA (DARK MODE) ---
+const darkMapStyle = [
+    { elementType: "geometry", stylers: [{ color: "#1e293b" }] }, // Slate-800
+    { elementType: "labels.text.stroke", stylers: [{ color: "#1e293b" }] },
+    { elementType: "labels.text.fill", stylers: [{ color: "#94a3b8" }] }, // Slate-400
+    { featureType: "administrative.locality", elementType: "labels.text.fill", stylers: [{ color: "#cbd5e1" }] },
+    { featureType: "poi", stylers: [{ visibility: "off" }] },
+    { featureType: "road", elementType: "geometry", stylers: [{ color: "#334155" }] }, // Slate-700
+    { featureType: "road", elementType: "geometry.stroke", stylers: [{ color: "#1e293b" }] },
+    { featureType: "road.highway", elementType: "geometry", stylers: [{ color: "#475569" }] }, // Slate-600
+    { featureType: "water", elementType: "geometry", stylers: [{ color: "#0f172a" }] }, // Slate-900
+    { featureType: "transit", stylers: [{ visibility: "off" }] },
+];
+
+const mapContainerStyle = { width: '100%', height: '100%' };
+
+// --- Interfaces ---
+interface MarketPinData {
+    id: string;
+    name: string;
+    latitude: number;
+    longitude: number;
+    sovereign: {
+        id: string | null;
+        name: string;
+        avatar: string | null;
+        score: number;
+    };
+    myScore: number;
+    status: 'sovereign' | 'hostile' | 'neutral';
+}
 
 interface LeaderboardItem {
     user_id: string;
@@ -78,11 +126,38 @@ interface Territory {
     market_name: string;
 }
 
+// --- Componente: Marcador do Mapa ---
+const GamificationMarker = ({ pin, onClick }: { pin: MarketPinData, onClick: () => void }) => {
+    const isMe = pin.status === 'sovereign';
+    const isHostile = pin.status === 'hostile';
+
+    let colorClass = isMe ? "border-yellow-500 shadow-yellow-500/50" : isHostile ? "border-rose-500 shadow-rose-500/50" : "border-slate-400 shadow-slate-500/50";
+    let icon = isMe ? <Crown className="w-3 h-3 text-yellow-500" /> : isHostile ? <User className="w-3 h-3 text-rose-500" /> : <Crosshair className="w-3 h-3 text-slate-400" />;
+
+    return (
+        <div className="absolute -translate-x-1/2 -translate-y-full cursor-pointer group z-10 hover:z-50" onClick={(e) => { e.stopPropagation(); onClick(); }}>
+            {/* Avatar/Icone do Pin */}
+            <div className={cn("w-8 h-8 rounded-full border-2 bg-slate-900 flex items-center justify-center shadow-lg transition-transform group-hover:scale-125", colorClass)}>
+                {isHostile && pin.sovereign.avatar ? (
+                    <img src={pin.sovereign.avatar} className="w-full h-full rounded-full object-cover" />
+                ) : icon}
+            </div>
+            {/* Triângulo Base */}
+            <div className={cn("w-0 h-0 border-l-[4px] border-l-transparent border-r-[4px] border-r-transparent border-t-[6px] absolute left-1/2 -translate-x-1/2 -bottom-1.5", isMe ? "border-t-yellow-500" : isHostile ? "border-t-rose-500" : "border-t-slate-400")}></div>
+        </div>
+    );
+};
+
 export default function Gamification() {
     const navigate = useNavigate();
     const { user, loading: authLoading } = useAuth();
+    const apiKey = import.meta.env.VITE_GOOGLE_MAPS_KEY || "";
+    const { isLoaded, loadError } = useJsApiLoader({ id: 'google-map-script', googleMapsApiKey: apiKey });
 
+    const [map, setMap] = useState<google.maps.Map | null>(null);
     const [loading, setLoading] = useState(true);
+
+    // Dados
     const [leaderboard, setLeaderboard] = useState<LeaderboardItem[]>([]);
     const [myPoints, setMyPoints] = useState(0);
     const [myRank, setMyRank] = useState<number>(0);
@@ -90,43 +165,46 @@ export default function Gamification() {
     const [missions, setMissions] = useState<Mission[]>([]);
     const [notifications, setNotifications] = useState<NotificationItem[]>([]);
     const [territories, setTerritories] = useState<Territory[]>([]);
-    const [isRulesOpen, setIsRulesOpen] = useState(false);
+    const [marketPins, setMarketPins] = useState<MarketPinData[]>([]);
 
+    // UI
+    const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null);
+    const [selectedMarket, setSelectedMarket] = useState<MarketPinData | null>(null);
+
+    const onLoad = useCallback((map: google.maps.Map) => setMap(map), []);
+    const onUnmount = useCallback(() => setMap(null), []);
+
+    // Geolocalização
+    useEffect(() => {
+        if (navigator.geolocation) {
+            navigator.geolocation.getCurrentPosition(
+                (pos) => setUserLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+                () => setUserLocation({ lat: -23.5505, lng: -46.6333 }) // Fallback SP
+            );
+        }
+    }, []);
+
+    // Carregar Dados
     useEffect(() => {
         if (!authLoading && !user) navigate("/auth");
-    }, [user, authLoading, navigate]);
-
-    useEffect(() => {
         if (user) loadData();
-    }, [user]);
+    }, [user, authLoading, navigate]);
 
     const loadData = async () => {
         if (leaderboard.length === 0) setLoading(true);
         try {
-            const [rankingResult, pointsResult, alertsResult, missionsResult, notifsResult, territoriesResult] = await Promise.all([
+            const [rankingResult, pointsResult, alertsResult, missionsResult, notifsResult, territoriesResult, marketsResult, scoresResult] = await Promise.all([
                 supabase.rpc('get_monthly_leaderboard'),
                 supabase.rpc('get_my_monthly_points', { target_user_id: user!.id }),
-                supabase.from('price_alerts')
-                    .select('id, product_name, price, created_at, markets(name)')
-                    .order('created_at', { ascending: false })
-                    .limit(3),
-                supabase.from('missions')
-                    .select('*')
-                    .eq('is_active', true),
-                supabase.from('notifications')
-                    .select('*')
-                    .eq('user_id', user!.id)
-                    .eq('read', false)
-                    .order('created_at', { ascending: false }),
-                // Buscar Territórios onde tenho score > 0
-                // (Idealmente filtraríamos apenas onde sou top 1 no backend, mas faremos no front para simplificar a query agora)
-                supabase.from('market_scores')
-                    .select('market_id, score, markets(name)')
-                    .eq('user_id', user!.id)
-                    .gt('score', 0)
-                    .order('score', { ascending: false })
+                supabase.from('price_alerts').select('id, product_name, price, created_at, markets(name)').order('created_at', { ascending: false }).limit(3),
+                supabase.from('missions').select('*').eq('is_active', true),
+                supabase.from('notifications').select('*').eq('user_id', user!.id).eq('read', false).order('created_at', { ascending: false }),
+                supabase.from('market_scores').select('market_id, score, markets(name)').eq('user_id', user!.id).gt('score', 0).order('score', { ascending: false }),
+                supabase.from('markets').select('id, name, latitude, longitude'),
+                supabase.from('market_scores').select('market_id, score, user_id, profiles(display_name, avatar_url)').order('score', { ascending: false })
             ]);
 
+            // Processar Ranking e Pontos
             if (rankingResult.data) {
                 // @ts-ignore
                 setLeaderboard(rankingResult.data || []);
@@ -134,38 +212,49 @@ export default function Gamification() {
                 const me = rankingResult.data.find((r: any) => r.user_id === user!.id);
                 if (me) setMyRank(me.my_rank);
             }
-
             setMyPoints(pointsResult.data || 0);
 
-            if (alertsResult.data) {
-                setAlerts(alertsResult.data.map((a: any) => ({
-                    id: a.id,
-                    product_name: a.product_name,
-                    price: a.price,
-                    market_name: a.markets?.name || 'Mercado',
-                    created_at: a.created_at
-                })) || []);
-            }
-
-            if (missionsResult.data) {
+            // Processar Pins do Mapa
+            if (marketsResult.data && scoresResult.data) {
                 // @ts-ignore
-                setMissions(missionsResult.data || []);
+                const pins: MarketPinData[] = marketsResult.data.map((m: any) => {
+                    // @ts-ignore
+                    const marketScores = scoresResult.data.filter((s: any) => s.market_id === m.id);
+                    const leader = marketScores[0];
+                    // @ts-ignore
+                    const myScoreEntry = marketScores.find((s: any) => s.user_id === user!.id);
+                    const myScore = myScoreEntry ? myScoreEntry.score : 0;
+
+                    let status: MarketPinData['status'] = 'neutral';
+                    if (leader) status = leader.user_id === user!.id ? 'sovereign' : 'hostile';
+
+                    return {
+                        id: m.id,
+                        name: m.name,
+                        latitude: m.latitude,
+                        longitude: m.longitude,
+                        sovereign: {
+                            id: leader?.user_id || null,
+                            name: leader?.profiles?.display_name || "Ninguém",
+                            avatar: leader?.profiles?.avatar_url || null,
+                            score: leader?.score || 0
+                        },
+                        myScore: myScore,
+                        status: status
+                    };
+                });
+                setMarketPins(pins);
             }
 
-            if (notifsResult.data) {
-                // @ts-ignore
-                setNotifications(notifsResult.data || []);
-            }
-
-            if (territoriesResult.data) {
-                // Mapeia para interface
-                const myTerritories = territoriesResult.data.map((t: any) => ({
-                    market_id: t.market_id,
-                    score: t.score,
-                    market_name: t.markets?.name
-                }));
-                setTerritories(myTerritories);
-            }
+            // Processar Outros Dados
+            // @ts-ignore
+            if (alertsResult.data) setAlerts(alertsResult.data.map((a: any) => ({ id: a.id, product_name: a.product_name, price: a.price, market_name: a.markets?.name || 'Mercado', created_at: a.created_at })) || []);
+            // @ts-ignore
+            if (missionsResult.data) setMissions(missionsResult.data || []);
+            // @ts-ignore
+            if (notifsResult.data) setNotifications(notifsResult.data || []);
+            // @ts-ignore
+            if (territoriesResult.data) setTerritories(territoriesResult.data.map((t: any) => ({ market_id: t.market_id, score: t.score, market_name: t.markets?.name })));
 
         } catch (error) {
             console.error("Erro ao carregar dados:", error);
@@ -185,294 +274,280 @@ export default function Gamification() {
     const restOfRanking = leaderboard.slice(3, 10);
 
     return (
-        <div className="min-h-screen bg-gray-50/50 pb-32">
-            <header className="px-6 pt-8 pb-4 bg-white sticky top-0 z-30 border-b border-gray-100/50 backdrop-blur-md bg-white/80">
+        <div className="min-h-screen bg-gray-50 pb-32">
+
+            {/* Header Simples */}
+            <header className="px-6 pt-6 pb-2 bg-white sticky top-0 z-30 border-b border-gray-100">
                 <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                        <Trophy className="w-6 h-6 text-yellow-500 fill-yellow-500" />
-                        <h1 className="text-xl font-display font-bold text-gray-900">Arena de Pontos</h1>
-                    </div>
+                    <h1 className="text-xl font-display font-bold text-gray-900 flex items-center gap-2">
+                        <Trophy className="w-5 h-5 text-yellow-500 fill-yellow-500" />
+                        Arena de Pontos
+                    </h1>
                     <AppMenu />
                 </div>
             </header>
 
-            <main className="px-5 pt-6 space-y-8">
+            <main className="px-4 pt-6 space-y-6">
 
-                {/* 0. NOTIFICAÇÕES */}
-                {notifications.length > 0 && (
-                    <div className="space-y-2 animate-slide-up">
-                        {notifications.map(n => (
-                            <div key={n.id} className={cn("p-3 rounded-xl border flex gap-3 items-start relative shadow-sm", n.type === 'warning' ? "bg-yellow-50 border-yellow-200" : "bg-red-50 border-red-200")}>
-                                <div className={cn("p-1.5 rounded-full shrink-0", n.type === 'warning' ? "bg-yellow-100 text-yellow-700" : "bg-red-100 text-red-700")}>
-                                    {n.type === 'warning' ? <AlertTriangle className="w-4 h-4" /> : <Crown className="w-4 h-4" />}
-                                </div>
-                                <div className="flex-1 pr-6">
-                                    <h4 className={cn("text-sm font-bold", n.type === 'warning' ? "text-yellow-900" : "text-red-900")}>{n.title}</h4>
-                                    <p className={cn("text-xs leading-relaxed mt-0.5", n.type === 'warning' ? "text-yellow-800" : "text-red-800")}>{n.message}</p>
-                                </div>
-                                <button onClick={() => markAsRead(n.id)} className="absolute top-2 right-2 p-1 text-gray-400 hover:text-gray-600 hover:bg-black/5 rounded-full transition-colors">
-                                    <X className="w-4 h-4" />
-                                </button>
+                {/* 1. CARD PRINCIPAL: MAPA TÁTICO & STATUS */}
+                <div className="relative rounded-3xl overflow-hidden bg-slate-900 text-white shadow-xl h-80 border border-slate-800">
+
+                    {/* Header de Status (Sobreposto ao Mapa) */}
+                    <div className="absolute top-0 left-0 right-0 p-5 z-20 bg-gradient-to-b from-slate-950/90 to-transparent pointer-events-none">
+                        <div className="flex justify-between items-start">
+                            <div className="pointer-events-auto">
+                                <p className="text-[10px] text-slate-300 font-bold uppercase tracking-wider mb-1 flex items-center gap-1"><Flame className="w-3 h-3 text-orange-500" /> Sua Pontuação</p>
+                                <h2 className="text-4xl font-display font-bold text-yellow-400 drop-shadow-md">{myPoints}</h2>
                             </div>
-                        ))}
+                            <div className="text-right pointer-events-auto">
+                                <div className="inline-flex items-center gap-2 bg-white/10 backdrop-blur-md px-3 py-1 rounded-full border border-white/20 shadow-lg">
+                                    <Trophy className="w-3 h-3 text-yellow-400" />
+                                    <span className="text-sm font-bold">#{myRank || '-'}</span>
+                                </div>
+                                {/* Botão de Regras */}
+                                <div className="mt-2">
+                                    <Dialog>
+                                        <DialogTrigger asChild>
+                                            <button className="text-[10px] text-slate-300 underline hover:text-white flex items-center justify-end gap-1 w-full bg-black/40 px-2 py-1 rounded-md">
+                                                <Info className="w-3 h-3" /> Regras
+                                            </button>
+                                        </DialogTrigger>
+                                        <DialogContent>
+                                            <DialogHeader><DialogTitle>Tabela de Pontuação</DialogTitle></DialogHeader>
+                                            <Table>
+                                                <TableHeader>
+                                                    <TableRow><TableHead>Ação</TableHead><TableHead className="text-right">Pts</TableHead></TableRow>
+                                                </TableHeader>
+                                                <TableBody>
+                                                    <TableRow><TableCell>Finalizar Lista</TableCell><TableCell className="text-right font-bold text-green-600">+100</TableCell></TableRow>
+                                                    <TableRow><TableCell>Cadastrar Preço</TableCell><TableCell className="text-right font-bold text-blue-600">+5</TableCell></TableRow>
+                                                    <TableRow><TableCell>Validar Oferta</TableCell><TableCell className="text-right font-bold text-yellow-600">+10</TableCell></TableRow>
+                                                </TableBody>
+                                            </Table>
+                                        </DialogContent>
+                                    </Dialog>
+                                </div>
+                            </div>
+                        </div>
                     </div>
-                )}
 
-                {/* 1. CARD DE STATUS (SKELETON FIXO) */}
-                <section className="relative min-h-[220px]">
-                    {loading && leaderboard.length === 0 ? (
-                        <div className="w-full h-[220px] rounded-xl bg-gray-200 animate-pulse" />
-                    ) : (
-                        <Card className="border-none shadow-xl shadow-indigo-500/20 bg-gradient-to-br from-[#4F46E5] to-[#6366f1] text-white overflow-hidden relative animate-fade-in">
-                            <div className="absolute top-0 right-0 w-64 h-64 bg-white/10 rounded-full blur-3xl -mr-16 -mt-16 pointer-events-none" />
-                            <CardContent className="p-6 relative z-10">
-                                <div className="flex justify-between items-start">
-                                    <div>
-                                        <Badge className="bg-white/20 hover:bg-white/30 text-white border-none mb-2">Ranking Mensal</Badge>
-                                        <h2 className="text-5xl font-display font-bold tracking-tighter">{myPoints}</h2>
-                                        <p className="text-indigo-100 text-sm font-medium mt-1">pontos acumulados</p>
-                                    </div>
-                                    <div className="flex flex-col items-end">
-                                        <div className="bg-white/10 p-3 rounded-2xl backdrop-blur-sm border border-white/10 text-center min-w-[80px]">
-                                            <span className="block text-xs text-indigo-200 uppercase tracking-wider font-bold">Posição</span>
-                                            <span className="block text-2xl font-bold">#{myRank || '-'}</span>
+                    {/* GOOGLE MAPS REAL */}
+                    <div className="h-full w-full bg-slate-800">
+                        {isLoaded ? (
+                            <GoogleMap
+                                mapContainerStyle={mapContainerStyle}
+                                center={userLocation || { lat: -23.5505, lng: -46.6333 }}
+                                zoom={14}
+                                onLoad={onLoad}
+                                onUnmount={onUnmount}
+                                options={{
+                                    styles: darkMapStyle,
+                                    disableDefaultUI: true, // Mapa limpo
+                                    clickableIcons: false,
+                                    zoomControl: false,
+                                    gestureHandling: "greedy",
+                                    backgroundColor: "#1e293b"
+                                }}
+                            >
+                                {/* Radar do Jogador */}
+                                {userLocation && (
+                                    <OverlayView position={userLocation} mapPaneName={OverlayView.OVERLAY_MOUSE_TARGET} getPixelPositionOffset={(w, h) => ({ x: -20, y: -20 })}>
+                                        <div className="relative w-10 h-10 flex items-center justify-center pointer-events-none">
+                                            <div className="absolute w-[200%] h-[200%] border border-green-500/30 rounded-full animate-ping"></div>
+                                            <div className="w-4 h-4 bg-green-500 rounded-full border-2 border-white shadow-[0_0_15px_#22c55e] z-10"></div>
                                         </div>
-                                    </div>
-                                </div>
-                                <div className="mt-6">
-                                    <div className="flex justify-between text-xs text-indigo-100 mb-2">
-                                        <span>Próximo nível</span>
-                                        <span>Líder: {leaderboard[0]?.total_points || 0} pts</span>
-                                    </div>
-                                    <Progress value={leaderboard[0] ? (myPoints / leaderboard[0].total_points) * 100 : 0} className="h-2 bg-black/20" indicatorClassName="bg-yellow-400" />
-                                    <div className="mt-4 flex items-center gap-2 text-xs text-white/80 cursor-pointer hover:text-white transition-colors" onClick={() => setIsRulesOpen(true)}>
-                                        <Gift className="w-4 h-4" />
-                                        <span>Tabela de Pontos e Prêmios</span>
-                                        <ChevronRight className="w-3 h-3 ml-auto" />
-                                    </div>
-                                </div>
-                            </CardContent>
-                        </Card>
-                    )}
-                </section>
+                                    </OverlayView>
+                                )}
 
-                {/* 1.5 MEUS TERRITÓRIOS (NOVO) */}
+                                {/* Pins dos Mercados */}
+                                {marketPins.map(pin => (
+                                    <OverlayView key={pin.id} position={{ lat: pin.latitude, lng: pin.longitude }} mapPaneName={OverlayView.OVERLAY_MOUSE_TARGET} getPixelPositionOffset={(w, h) => ({ x: 0, y: 0 })}>
+                                        <GamificationMarker pin={pin} onClick={() => setSelectedMarket(pin)} />
+                                    </OverlayView>
+                                ))}
+                            </GoogleMap>
+                        ) : (
+                            <div className="h-full w-full flex items-center justify-center text-slate-500">
+                                <Loader2 className="w-8 h-8 animate-spin" />
+                            </div>
+                        )}
+                    </div>
+                </div>
+
+                {/* 2. MEUS TERRITÓRIOS (SCROLL HORIZONTAL) */}
                 {territories.length > 0 && (
                     <section>
-                        <div className="flex items-center gap-2 mb-4">
+                        <div className="flex items-center gap-2 mb-3 px-1">
                             <Crown className="w-5 h-5 text-yellow-600 fill-yellow-600" />
-                            <h3 className="font-bold text-gray-900">Meus Territórios</h3>
+                            <h3 className="font-bold text-gray-900">Domínios Conquistados</h3>
                         </div>
-                        <div className="grid grid-cols-2 gap-3">
+
+                        <div className="flex overflow-x-auto gap-3 pb-4 -mx-4 px-4 snap-x no-scrollbar">
                             {territories.map(t => (
-                                <div key={t.market_id} className="bg-gradient-to-br from-yellow-50 to-white p-3 rounded-xl border border-yellow-200 shadow-sm flex flex-col justify-center items-center text-center cursor-pointer hover:border-yellow-400 transition-colors" onClick={() => navigate(`/ver-mercado/${t.market_id}`)}>
-                                    <div className="bg-yellow-100 p-2 rounded-full mb-2">
-                                        <Crown className="w-4 h-4 text-yellow-700 fill-yellow-700" />
+                                <div
+                                    key={t.market_id}
+                                    onClick={() => navigate(`/ver-mercado/${t.market_id}`)}
+                                    className="snap-center shrink-0 w-28 h-28 bg-white rounded-2xl border border-yellow-200 shadow-sm flex flex-col items-center justify-center p-2 text-center relative overflow-hidden group cursor-pointer hover:border-yellow-400 hover:shadow-md transition-all"
+                                >
+                                    <div className="absolute top-0 right-0 bg-yellow-100 text-yellow-800 text-[8px] font-bold px-1.5 py-0.5 rounded-bl-lg">TOP 1</div>
+                                    <div className="w-10 h-10 bg-gradient-to-br from-yellow-100 to-white rounded-full flex items-center justify-center mb-2 shadow-sm border border-yellow-50">
+                                        <Crown className="w-5 h-5 text-yellow-600" />
                                     </div>
-                                    <h4 className="font-bold text-xs text-gray-900 line-clamp-1">{t.market_name}</h4>
-                                    <span className="text-[10px] text-yellow-800 font-bold mt-1">{t.score} pts</span>
+                                    <h4 className="font-bold text-[10px] text-gray-800 line-clamp-2 leading-tight mb-1">{t.market_name}</h4>
+                                    <span className="text-[9px] text-gray-500 font-mono bg-gray-50 px-1.5 rounded">{t.score} pts</span>
                                 </div>
                             ))}
                         </div>
                     </section>
                 )}
 
-                {/* 2. MISSÕES (SKELETON FIXO) */}
+                {/* 3. VALIDAR OFERTAS */}
                 <section>
-                    <div className="flex items-center gap-2 mb-4">
-                        <Target className="w-5 h-5 text-indigo-600" />
-                        <h3 className="font-bold text-gray-900">Missões Ativas</h3>
+                    <div className="flex items-center justify-between mb-3 px-1">
+                        <div className="flex items-center gap-2">
+                            <ShieldAlert className="w-5 h-5 text-red-500" />
+                            <h3 className="font-bold text-gray-900">Alertas de Preço</h3>
+                        </div>
+                        <Button variant="link" className="text-xs h-auto p-0 text-slate-500" onClick={() => navigate('/comunidade')}>Ver todos</Button>
                     </div>
-                    <div className="space-y-3">
+                    <div className="space-y-2">
+                        {alerts.length > 0 ? (
+                            alerts.map(alert => (
+                                <div key={alert.id} onClick={() => navigate('/comunidade')} className="bg-white p-3 rounded-xl border border-gray-100 flex items-center justify-between cursor-pointer hover:bg-gray-50 active:scale-98 transition-transform shadow-sm">
+                                    <div className="flex items-center gap-3">
+                                        <div className="w-8 h-8 rounded-full bg-red-50 flex items-center justify-center text-red-500 font-bold text-[10px] border border-red-100">R$</div>
+                                        <div>
+                                            <p className="text-sm font-bold text-gray-900 line-clamp-1">{alert.product_name}</p>
+                                            <p className="text-[10px] text-gray-500 flex items-center gap-1"><MapPin className="w-3 h-3" /> {alert.market_name}</p>
+                                        </div>
+                                    </div>
+                                    <Badge variant="outline" className="border-green-200 text-green-700 bg-green-50 text-[10px] whitespace-nowrap">+10 pts</Badge>
+                                </div>
+                            ))
+                        ) : (
+                            <div className="text-center text-xs text-gray-400 py-6 border border-dashed border-gray-200 rounded-xl bg-gray-50/50">
+                                <ShieldAlert className="w-6 h-6 mx-auto mb-2 opacity-20" />
+                                Sem alertas pendentes na sua região.
+                            </div>
+                        )}
+                    </div>
+                </section>
+
+                {/* 4. MISSÕES ATIVAS */}
+                <section>
+                    <div className="flex items-center justify-between mb-3 px-1">
+                        <div className="flex items-center gap-2">
+                            <Target className="w-5 h-5 text-indigo-600" />
+                            <h3 className="font-bold text-gray-900">Missões Prioritárias</h3>
+                        </div>
+                    </div>
+                    <div className="grid gap-3">
                         {loading && missions.length === 0 ? (
-                            <>
-                                <div className="h-20 w-full bg-gray-200 rounded-2xl animate-pulse" />
-                                <div className="h-20 w-full bg-gray-200 rounded-2xl animate-pulse" />
-                            </>
+                            <div className="h-20 w-full bg-gray-200 rounded-2xl animate-pulse" />
                         ) : (
                             missions.map((mission) => (
-                                <div key={mission.id} onClick={() => navigate(mission.action_link)} className="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm flex items-center gap-4 active:scale-98 transition-transform cursor-pointer group hover:border-indigo-100 animate-slide-up">
-                                    <div className={cn("w-12 h-12 rounded-xl flex items-center justify-center shrink-0", mission.icon === 'cart' ? "bg-blue-50 text-blue-600" : mission.icon === 'community' ? "bg-orange-50 text-orange-600" : "bg-green-50 text-green-600")}>
-                                        {mission.icon === 'cart' && <Target className="w-6 h-6" />}
-                                        {mission.icon === 'community' && <Flame className="w-6 h-6" />}
-                                        {mission.icon === 'price' && <TrendingUp className="w-6 h-6" />}
+                                <div key={mission.id} onClick={() => navigate(mission.action_link)} className="bg-gradient-to-r from-indigo-50 to-white p-4 rounded-2xl border border-indigo-100 shadow-sm flex items-center gap-4 cursor-pointer active:scale-98 transition-transform group">
+                                    <div className="w-10 h-10 rounded-full bg-white border border-indigo-100 flex items-center justify-center text-indigo-600 shadow-sm group-hover:bg-indigo-600 group-hover:text-white transition-colors shrink-0">
+                                        {mission.icon === 'cart' ? <ListChecks className="w-5 h-5" /> : <Flame className="w-5 h-5" />}
                                     </div>
                                     <div className="flex-1">
-                                        <h4 className="font-bold text-sm text-gray-900 group-hover:text-indigo-600 transition-colors">{mission.title}</h4>
-                                        <p className="text-xs text-gray-500">{mission.description}</p>
+                                        <h4 className="font-bold text-sm text-gray-900">{mission.title}</h4>
+                                        <p className="text-xs text-gray-500 line-clamp-1">{mission.description}</p>
                                     </div>
-                                    <Badge className="bg-gray-900 text-white border-none">+{mission.reward_points}</Badge>
+                                    <Badge className="bg-indigo-600 text-white border-none shadow-md whitespace-nowrap">+{mission.reward_points}</Badge>
                                 </div>
                             ))
                         )}
                     </div>
                 </section>
 
-                {/* 3. ALERTAS (SKELETON FIXO) */}
-                <section>
-                    <div className="flex items-center justify-between mb-4">
-                        <div className="flex items-center gap-2">
-                            <ShieldAlert className="w-5 h-5 text-red-500" />
-                            <h3 className="font-bold text-gray-900">Validar Ofertas</h3>
-                        </div>
-                        <Button variant="link" className="text-xs h-auto p-0" onClick={() => navigate('/comunidade')}>Ver todas</Button>
+                {/* 5. RANKING (CLEAN) */}
+                <section className="pb-6">
+                    <div className="flex items-center gap-2 mb-3 px-1">
+                        <Flame className="w-5 h-5 text-gray-400" />
+                        <h3 className="font-bold text-gray-600 text-sm uppercase tracking-wide">Ranking Global</h3>
                     </div>
-                    <div className="grid gap-3">
-                        {loading && alerts.length === 0 ? (
-                            <div className="h-16 w-full bg-gray-200 rounded-xl animate-pulse" />
-                        ) : alerts.length > 0 ? (
-                            alerts.map(alert => (
-                                <div key={alert.id} onClick={() => navigate('/comunidade')} className="bg-white p-3 rounded-xl border border-gray-100 shadow-sm flex items-center justify-between cursor-pointer active:bg-gray-50 animate-slide-up">
+
+                    <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden shadow-sm">
+                        {leaderboard.length > 0 ? (
+                            <div className="divide-y divide-gray-50">
+                                {leaderboard.slice(0, 5).map((player, idx) => (
+                                    <div key={player.user_id} className={cn("flex items-center justify-between p-3", player.user_id === user?.id ? "bg-blue-50/50" : "")}>
+                                        <div className="flex items-center gap-3">
+                                            <span className={cn("font-bold w-4 text-center text-xs", idx < 3 ? "text-gray-900" : "text-gray-400")}>{idx + 1}</span>
+                                            <Avatar className="w-8 h-8 border border-gray-100">
+                                                <AvatarImage src={player.avatar_url} />
+                                                <AvatarFallback className="text-xs bg-gray-100 text-gray-500">{player.display_name?.[0]}</AvatarFallback>
+                                            </Avatar>
+                                            <span className={cn("text-xs font-medium truncate max-w-[140px]", player.user_id === user?.id ? "text-blue-700 font-bold" : "text-gray-600")}>
+                                                {player.display_name} {player.user_id === user?.id && "(Eu)"}
+                                            </span>
+                                        </div>
+                                        <span className="text-xs font-bold text-gray-500 font-mono">{player.total_points}</span>
+                                    </div>
+                                ))}
+                                <div className="p-2 text-center bg-gray-50/50">
+                                    <Button variant="ghost" size="sm" className="text-[10px] text-gray-400 h-6 w-full hover:bg-transparent hover:text-gray-600">Ver ranking completo</Button>
+                                </div>
+                            </div>
+                        ) : (
+                            <div className="p-4 text-center text-gray-400 text-xs">Carregando ranking...</div>
+                        )}
+                    </div>
+                </section>
+
+            </main>
+
+            {/* SHEET DE DETALHES DO MAPA (PAINEL TÁTICO) */}
+            <Sheet open={!!selectedMarket} onOpenChange={(open) => !open && setSelectedMarket(null)}>
+                <SheetContent side="bottom" className="rounded-t-3xl border-t border-slate-800 bg-slate-900 p-0 text-white z-[60]">
+                    <SheetHeader className="sr-only"><SheetTitle>Detalhes da Arena</SheetTitle></SheetHeader>
+                    {selectedMarket && (
+                        <>
+                            <div className={cn("h-24 w-full relative overflow-hidden rounded-t-3xl bg-gradient-to-b from-indigo-900/40 to-slate-900")}>
+                                <div className="absolute top-4 left-6 z-10">
+                                    <h2 className="text-xl font-bold text-white drop-shadow-md">{selectedMarket.name}</h2>
+                                    <div className="flex items-center gap-2 mt-1"><MapPin className="w-3 h-3 text-slate-400" /><span className="text-xs text-slate-300">Mercado Local</span></div>
+                                </div>
+                                <div className="absolute right-4 top-4">
+                                    {selectedMarket.status === 'sovereign' && <Badge className="bg-yellow-500 text-black border-none font-bold">DOMINADO</Badge>}
+                                    {selectedMarket.status === 'hostile' && <Badge className="bg-rose-600 text-white border-none">HOSTIL</Badge>}
+                                    {selectedMarket.status === 'neutral' && <Badge variant="outline" className="text-cyan-400 border-cyan-600">NEUTRO</Badge>}
+                                </div>
+                            </div>
+                            <div className="px-6 pb-8 -mt-6 relative z-20">
+                                <div className="bg-slate-800 border border-slate-700 p-4 rounded-2xl flex items-center justify-between shadow-xl mb-6">
                                     <div className="flex items-center gap-3">
-                                        <div className="bg-red-50 w-10 h-10 rounded-full flex items-center justify-center text-red-500 font-bold text-xs">R$</div>
+                                        <div className="relative">
+                                            {selectedMarket.status === 'neutral' ? (
+                                                <div className="w-12 h-12 border-2 border-slate-600 rounded-full flex items-center justify-center bg-slate-700"><Ghost className="w-6 h-6 text-slate-500" /></div>
+                                            ) : (
+                                                <Avatar className={cn("w-12 h-12 border-2", selectedMarket.status === 'sovereign' ? "border-yellow-500" : "border-rose-600")}>
+                                                    <AvatarImage src={selectedMarket.sovereign.avatar || ""} />
+                                                    <AvatarFallback>S</AvatarFallback>
+                                                </Avatar>
+                                            )}
+                                            {selectedMarket.status !== 'neutral' && <div className="absolute -bottom-1 -right-1 bg-black rounded-full p-0.5"><Crown className={cn("w-3 h-3", selectedMarket.status === 'sovereign' ? "text-yellow-500" : "text-rose-500")} /></div>}
+                                        </div>
                                         <div>
-                                            <p className="text-sm font-bold text-gray-900">{alert.product_name}</p>
-                                            <p className="text-xs text-gray-500 flex items-center gap-1"><MapPin className="w-3 h-3" /> {alert.market_name}</p>
+                                            <p className="text-[10px] text-slate-400 uppercase tracking-wider font-bold">Soberano Atual</p>
+                                            <p className="text-sm font-bold text-white">{selectedMarket.sovereign.name}</p>
                                         </div>
                                     </div>
                                     <div className="text-right">
-                                        <span className="block font-bold text-green-700">R$ {alert.price.toFixed(2)}</span>
-                                        <Badge variant="outline" className="text-[10px] h-5 border-green-200 text-green-700 bg-green-50">+10 pts</Badge>
+                                        <p className="text-[10px] text-slate-400 uppercase font-bold">Pontos</p>
+                                        <p className="text-lg font-mono font-bold text-indigo-400">{selectedMarket.sovereign.score}</p>
                                     </div>
                                 </div>
-                            ))
-                        ) : (
-                            <div className="text-center text-sm text-gray-400 py-4 bg-gray-50 rounded-xl border border-dashed border-gray-200">
-                                Nenhuma oferta recente para validar.
+                                <Button className={cn("w-full h-14 text-lg font-bold rounded-2xl shadow-lg transition-transform active:scale-95", selectedMarket.status === 'sovereign' ? "bg-yellow-500 hover:bg-yellow-400 text-black" : "bg-indigo-600 hover:bg-indigo-500 text-white")} onClick={() => navigate(`/lista/nova`)}>
+                                    {selectedMarket.status === 'sovereign' ? <><Shield className="w-5 h-5 mr-2" /> MANTER DOMÍNIO</> : <><Swords className="w-5 h-5 mr-2" /> ATACAR AGORA</>}
+                                </Button>
+                                <p className="text-center text-[10px] text-slate-500 mt-3">Criar uma lista neste mercado rende +100 pontos.</p>
                             </div>
-                        )}
-                    </div>
-                </section>
-
-                {/* 4. LEADERBOARD (SKELETON FIXO) */}
-                <section>
-                    <div className="flex items-center gap-2 mb-4">
-                        <Flame className="w-5 h-5 text-orange-500" />
-                        <h3 className="font-bold text-gray-900">Top Jogadores</h3>
-                    </div>
-
-                    <div className="bg-white rounded-3xl border border-gray-100 shadow-sm overflow-hidden min-h-[300px]">
-                        {loading && leaderboard.length === 0 ? (
-                            <div className="p-6 space-y-4">
-                                <div className="flex justify-center items-end gap-4 h-32">
-                                    <div className="w-16 h-20 bg-gray-200 rounded-t-lg animate-pulse" />
-                                    <div className="w-16 h-28 bg-gray-200 rounded-t-lg animate-pulse" />
-                                    <div className="w-16 h-16 bg-gray-200 rounded-t-lg animate-pulse" />
-                                </div>
-                                <div className="space-y-2">
-                                    <div className="h-10 w-full bg-gray-200 rounded animate-pulse" />
-                                    <div className="h-10 w-full bg-gray-200 rounded animate-pulse" />
-                                </div>
-                            </div>
-                        ) : (
-                            <>
-                                <div className="flex justify-center items-end gap-4 py-6 bg-gradient-to-b from-orange-50/50 to-white border-b border-gray-50">
-                                    {/* 2nd Place */}
-                                    {topThree[1] && (
-                                        <div className="flex flex-col items-center">
-                                            <Avatar className="w-12 h-12 border-2 border-gray-200 shrink-0">
-                                                <AvatarImage src={topThree[1].avatar_url} className="object-cover h-full w-full" />
-                                                <AvatarFallback>{topThree[1].display_name[0]}</AvatarFallback>
-                                            </Avatar>
-                                            <span className="text-xs font-bold mt-1 text-gray-600">{topThree[1].display_name.split(' ')[0]}</span>
-                                            <span className="text-[10px] text-gray-400 font-bold">{topThree[1].total_points}</span>
-                                            <div className="mt-1 bg-gray-200 text-gray-600 text-[10px] font-bold px-2 rounded-full">#2</div>
-                                        </div>
-                                    )}
-
-                                    {/* 1st Place */}
-                                    {topThree[0] && (
-                                        <div className="flex flex-col items-center -mt-4">
-                                            <Star className="w-6 h-6 text-yellow-400 fill-yellow-400 animate-pulse mb-1" />
-                                            <Avatar className="w-16 h-16 border-4 border-yellow-400 shadow-lg shrink-0">
-                                                <AvatarImage src={topThree[0].avatar_url} className="object-cover h-full w-full" />
-                                                <AvatarFallback>{topThree[0].display_name[0]}</AvatarFallback>
-                                            </Avatar>
-                                            <span className="text-sm font-bold mt-1 text-gray-900">{topThree[0].display_name.split(' ')[0]}</span>
-                                            <span className="text-xs text-yellow-600 font-bold">{topThree[0].total_points} pts</span>
-                                            <div className="mt-1 bg-yellow-400 text-yellow-900 text-xs font-bold px-3 py-0.5 rounded-full shadow-sm">#1</div>
-                                        </div>
-                                    )}
-
-                                    {/* 3rd Place */}
-                                    {topThree[2] && (
-                                        <div className="flex flex-col items-center">
-                                            <Avatar className="w-12 h-12 border-2 border-orange-200 shrink-0">
-                                                <AvatarImage src={topThree[2].avatar_url} className="object-cover h-full w-full" />
-                                                <AvatarFallback>{topThree[2].display_name[0]}</AvatarFallback>
-                                            </Avatar>
-                                            <span className="text-xs font-bold mt-1 text-gray-600">{topThree[2].display_name.split(' ')[0]}</span>
-                                            <span className="text-[10px] text-gray-400 font-bold">{topThree[2].total_points}</span>
-                                            <div className="mt-1 bg-orange-100 text-orange-700 text-[10px] font-bold px-2 rounded-full">#3</div>
-                                        </div>
-                                    )}
-                                </div>
-
-                                <div className="divide-y divide-gray-50">
-                                    {restOfRanking.map((player) => (
-                                        <div key={player.user_id} className={cn("flex items-center justify-between p-4", player.user_id === user?.id && "bg-indigo-50")}>
-                                            <div className="flex items-center gap-3">
-                                                <span className="text-sm font-bold text-gray-400 w-6">#{player.my_rank}</span>
-                                                <Avatar className="w-8 h-8 shrink-0">
-                                                    <AvatarImage src={player.avatar_url} className="object-cover h-full w-full" />
-                                                    <AvatarFallback>{player.display_name[0]}</AvatarFallback>
-                                                </Avatar>
-                                                <span className={cn("text-sm font-medium", player.user_id === user?.id ? "text-indigo-700 font-bold" : "text-gray-700")}>
-                                                    {player.display_name} {player.user_id === user?.id && "(Você)"}
-                                                </span>
-                                            </div>
-                                            <span className="text-sm font-bold text-gray-900">{player.total_points}</span>
-                                        </div>
-                                    ))}
-                                </div>
-                            </>
-                        )}
-                    </div>
-                </section>
-            </main>
-
-            <Dialog open={isRulesOpen} onOpenChange={setIsRulesOpen}>
-                <DialogContent>
-                    <DialogHeader><DialogTitle>Tabela de Pontuação</DialogTitle></DialogHeader>
-                    <div className="mt-4">
-                        <Table>
-                            <TableHeader>
-                                <TableRow>
-                                    <TableHead>Ação</TableHead>
-                                    <TableHead className="text-right">Pontos</TableHead>
-                                </TableRow>
-                            </TableHeader>
-                            <TableBody>
-                                <TableRow>
-                                    <TableCell className="font-medium">Finalizar Compra</TableCell>
-                                    <TableCell className="text-right text-green-600 font-bold">+100</TableCell>
-                                </TableRow>
-                                <TableRow>
-                                    <TableCell className="font-medium">Cadastrar Preço (por item)</TableCell>
-                                    <TableCell className="text-right text-green-600 font-bold">+5</TableCell>
-                                </TableRow>
-                                <TableRow>
-                                    <TableCell className="font-medium">Postar Alerta (Você)</TableCell>
-                                    <TableCell className="text-right text-blue-600 font-bold">+5</TableCell>
-                                </TableRow>
-                                <TableRow>
-                                    <TableCell className="font-medium">Seu Alerta Confirmado</TableCell>
-                                    <TableCell className="text-right text-indigo-600 font-bold">+15 (Bônus)</TableCell>
-                                </TableRow>
-                                <TableRow>
-                                    <TableCell className="font-medium">Validar Oferta (GPS)</TableCell>
-                                    <TableCell className="text-right text-green-600 font-bold">+10</TableCell>
-                                </TableRow>
-                                <TableRow>
-                                    <TableCell className="font-medium text-red-500">Apagar Post (&lt;48h)</TableCell>
-                                    <TableCell className="text-right text-red-500 font-bold">-5</TableCell>
-                                </TableRow>
-                            </TableBody>
-                        </Table>
-                        <p className="text-xs text-muted-foreground mt-4 text-center">O jogador com mais pontos no fim do mês ganha o vale iFood!</p>
-                    </div>
-                </DialogContent>
-            </Dialog>
+                        </>
+                    )}
+                </SheetContent>
+            </Sheet>
         </div>
     );
 }

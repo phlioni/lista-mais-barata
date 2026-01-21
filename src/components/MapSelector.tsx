@@ -1,23 +1,10 @@
-import { useEffect, useState } from "react";
-import { MapContainer, TileLayer, Marker, useMapEvents, useMap } from "react-leaflet";
-import "leaflet/dist/leaflet.css";
-import L from "leaflet";
+import { useEffect, useState, useCallback, useRef } from "react";
+import { GoogleMap, useJsApiLoader, Marker } from "@react-google-maps/api";
 import { cn } from "@/lib/utils";
-import { Loader2 } from "lucide-react";
+import { Loader2, MapPin } from "lucide-react";
 
-// Correção dos ícones do Leaflet
-import icon from "leaflet/dist/images/marker-icon.png";
-import iconShadow from "leaflet/dist/images/marker-shadow.png";
-
-let DefaultIcon = L.icon({
-    iconUrl: icon,
-    shadowUrl: iconShadow,
-    iconSize: [25, 41],
-    iconAnchor: [12, 41],
-    popupAnchor: [1, -34],
-});
-
-L.Marker.prototype.options.icon = DefaultIcon;
+// Usa a mesma chave de API configurada no .env
+const apiKey = import.meta.env.VITE_GOOGLE_MAPS_KEY || "";
 
 interface MapSelectorProps {
     onLocationSelect?: (lat: number, lng: number) => void;
@@ -26,64 +13,79 @@ interface MapSelectorProps {
     readOnly?: boolean;
 }
 
-function MapEvents({
-    onSelect,
-    selectedLocation
-}: {
-    onSelect?: (lat: number, lng: number) => void,
-    selectedLocation?: { lat: number; lng: number } | null
-}) {
-    const map = useMap();
-
-    useMapEvents({
-        click(e) {
-            if (onSelect) {
-                onSelect(e.latlng.lat, e.latlng.lng);
-            }
-        },
+export function MapSelector({ onLocationSelect, selectedLocation, className, readOnly = false }: MapSelectorProps) {
+    const { isLoaded, loadError } = useJsApiLoader({
+        id: 'google-map-script', // <--- FIX: Padronizado com o mesmo ID das outras telas
+        googleMapsApiKey: apiKey
     });
 
-    useEffect(() => {
-        if (selectedLocation) {
-            map.flyTo([selectedLocation.lat, selectedLocation.lng], map.getZoom());
-        }
-    }, [selectedLocation, map]);
+    const [map, setMap] = useState<google.maps.Map | null>(null);
+    const [center, setCenter] = useState<{ lat: number; lng: number } | null>(null);
 
-    return null;
-}
-
-export function MapSelector({ onLocationSelect, selectedLocation, className, readOnly = false }: MapSelectorProps) {
-    const [initialPosition, setInitialPosition] = useState<{ lat: number; lng: number } | null>(null);
+    const hasCenteredRef = useRef(false);
 
     useEffect(() => {
         if (selectedLocation) {
-            setInitialPosition(selectedLocation);
+            setCenter(selectedLocation);
             return;
         }
 
-        if (navigator.geolocation) {
-            navigator.geolocation.getCurrentPosition(
-                (position) => {
-                    setInitialPosition({
-                        lat: position.coords.latitude,
-                        lng: position.coords.longitude,
-                    });
-                },
-                () => {
-                    setInitialPosition({ lat: -23.5505, lng: -46.6333 });
-                }
-            );
-        } else {
-            setInitialPosition({ lat: -23.5505, lng: -46.6333 });
+        if (!hasCenteredRef.current) {
+            if (navigator.geolocation) {
+                navigator.geolocation.getCurrentPosition(
+                    (position) => {
+                        setCenter({
+                            lat: position.coords.latitude,
+                            lng: position.coords.longitude,
+                        });
+                        hasCenteredRef.current = true;
+                    },
+                    () => {
+                        setCenter({ lat: -23.5505, lng: -46.6333 });
+                        hasCenteredRef.current = true;
+                    }
+                );
+            } else {
+                setCenter({ lat: -23.5505, lng: -46.6333 });
+                hasCenteredRef.current = true;
+            }
         }
+    }, [selectedLocation]);
+
+    useEffect(() => {
+        if (map && selectedLocation) {
+            map.panTo(selectedLocation);
+        }
+    }, [map, selectedLocation]);
+
+    const onLoad = useCallback((map: google.maps.Map) => {
+        setMap(map);
     }, []);
 
-    if (!initialPosition) {
+    const onUnmount = useCallback(() => {
+        setMap(null);
+    }, []);
+
+    const handleMapClick = useCallback((e: google.maps.MapMouseEvent) => {
+        if (readOnly || !onLocationSelect || !e.latLng) return;
+
+        const lat = e.latLng.lat();
+        const lng = e.latLng.lng();
+        onLocationSelect(lat, lng);
+    }, [readOnly, onLocationSelect]);
+
+    if (loadError) {
         return (
-            <div className={cn(
-                "flex items-center justify-center bg-accent rounded-2xl border border-border",
-                className || "h-64"
-            )}>
+            <div className={cn("flex flex-col items-center justify-center bg-muted rounded-2xl border border-border text-center p-4", className || "h-64")}>
+                <p className="text-sm font-bold text-destructive mb-1">Erro no Google Maps</p>
+                <p className="text-xs text-muted-foreground">Verifique sua chave de API.</p>
+            </div>
+        );
+    }
+
+    if (!isLoaded || !center) {
+        return (
+            <div className={cn("flex items-center justify-center bg-muted rounded-2xl border border-border", className || "h-64")}>
                 <div className="text-center">
                     <Loader2 className="w-8 h-8 animate-spin text-primary mx-auto mb-2" />
                     <p className="text-sm text-muted-foreground">Carregando mapa...</p>
@@ -93,40 +95,34 @@ export function MapSelector({ onLocationSelect, selectedLocation, className, rea
     }
 
     return (
-        <div
-            className={cn(
-                "rounded-2xl overflow-hidden border border-border relative z-0",
-                className || "h-64"
-            )}
-            // FIX PARA SAFARI/IPHONE: Força o navegador a reconhecer o recorte (clipping)
-            style={{
-                WebkitMaskImage: "-webkit-radial-gradient(white, black)",
-                maskImage: "radial-gradient(white, black)",
-                isolation: "isolate"
-            }}
-        >
-            <MapContainer
-                center={[initialPosition.lat, initialPosition.lng]}
+        <div className={cn("rounded-2xl overflow-hidden border border-border relative z-0", className || "h-64")}>
+            <GoogleMap
+                mapContainerStyle={{ width: '100%', height: '100%' }}
+                center={center}
                 zoom={15}
-                style={{ width: "100%", height: "100%" }}
-                className="z-[1]" // Garante que o canvas do mapa fique acima do fundo
-                dragging={!readOnly}
-                scrollWheelZoom={!readOnly}
-                doubleClickZoom={!readOnly}
+                onLoad={onLoad}
+                onUnmount={onUnmount}
+                onClick={handleMapClick}
+                options={{
+                    disableDefaultUI: readOnly,
+                    zoomControl: !readOnly,
+                    mapTypeControl: false,
+                    streetViewControl: false,
+                    fullscreenControl: false,
+                    clickableIcons: !readOnly,
+                    gestureHandling: "greedy",
+                }}
             >
-                <TileLayer
-                    attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
-                    url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-                />
-
-                {!readOnly && (
-                    <MapEvents onSelect={onLocationSelect} selectedLocation={selectedLocation} />
-                )}
-
                 {selectedLocation && (
-                    <Marker position={[selectedLocation.lat, selectedLocation.lng]} />
+                    <Marker position={selectedLocation} />
                 )}
-            </MapContainer>
+            </GoogleMap>
+
+            {!readOnly && !selectedLocation && (
+                <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none z-10 opacity-50">
+                    <MapPin className="w-8 h-8 text-primary animate-bounce" />
+                </div>
+            )}
         </div>
     );
 }

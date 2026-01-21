@@ -18,6 +18,7 @@ export function AppMenu({ triggerClassName }: AppMenuProps) {
         { path: "/listas", icon: ShoppingCart, label: "Minhas Listas" },
         { path: "/comunidade", icon: Users, label: "Comunidade" },
         { path: "/mercados", icon: MapPin, label: "Mercados" },
+        { path: "/arenas", icon: MapPin, label: "Arenas" },
         { path: "/configuracoes", icon: Settings, label: "Configurações" }, // Novo item adicionado
     ];
 
