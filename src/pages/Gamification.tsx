@@ -22,7 +22,8 @@ import {
     Ghost,
     Crosshair,
     Shield,
-    ShoppingBasket
+    ShoppingBasket,
+    HeartCrack // Adicionado
 } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Card, CardContent } from "@/components/ui/card";
@@ -71,7 +72,7 @@ const darkMapStyle = [
 
 const mapContainerStyle = { width: '100%', height: '100%' };
 
-// --- CORREÇÃO 1: Função de offset estática para evitar re-renderização e "piscadas" nos pins ---
+// --- CORREÇÃO 1: Função de offset estática ---
 const getPixelPositionOffset = (width: number, height: number) => ({ x: 0, y: 0 });
 const getPlayerPixelOffset = (width: number, height: number) => ({ x: -20, y: -20 });
 
@@ -124,10 +125,12 @@ interface NotificationItem {
     read: boolean;
 }
 
+// Alterado para suportar a lógica de perda
 interface Territory {
     market_id: string;
     score: number;
     market_name: string;
+    is_current_sovereign: boolean;
 }
 
 // --- Componente: Marcador do Mapa ---
@@ -259,6 +262,25 @@ export default function Gamification() {
                     };
                 });
                 setMarketPins(pins);
+
+                // --- MODIFICAÇÃO: Lógica para identificar território perdido ---
+                // @ts-ignore
+                const processedTerritories = territoriesResult.data.map((t: any) => {
+                    // @ts-ignore
+                    const marketScores = scoresResult.data.filter((s: any) => s.market_id === t.market_id);
+                    const currentLeader = marketScores[0];
+
+                    // Se o líder atual for eu, sou soberano. Se não, perdi o reinado.
+                    const isSovereign = currentLeader?.user_id === user!.id;
+
+                    return {
+                        market_id: t.market_id,
+                        score: t.score,
+                        market_name: t.markets?.name,
+                        is_current_sovereign: isSovereign
+                    };
+                });
+                setTerritories(processedTerritories);
             }
 
             // Processar Outros Dados
@@ -268,8 +290,7 @@ export default function Gamification() {
             if (missionsResult.data) setMissions(missionsResult.data || []);
             // @ts-ignore
             if (notifsResult.data) setNotifications(notifsResult.data || []);
-            // @ts-ignore
-            if (territoriesResult.data) setTerritories(territoriesResult.data.map((t: any) => ({ market_id: t.market_id, score: t.score, market_name: t.markets?.name })));
+            // removido o setTerritories antigo daqui pois agora está dentro do bloco acima
 
         } catch (error) {
             console.error("Erro ao carregar dados:", error);
@@ -290,7 +311,7 @@ export default function Gamification() {
 
     return (
         <div className="min-h-screen bg-gray-50 pb-32">
-            {/* CSS INJETADO PARA REMOVER LEGENDAS DO MAPA (Map Data, Terms, Google Logo) */}
+            {/* CSS: Remoção de Legendas + Efeito de Card Quebrado */}
             <style>
                 {`
                     .gmnoprint a, .gmnoprint span, .gm-style-cc {
@@ -299,7 +320,6 @@ export default function Gamification() {
                     .gmnoprint div {
                         background: none !important;
                     }
-                    /* Oculta logotipo do Google se desejar (Cuidado: Pode violar TOS se for app público) */
                     a[href^="http://maps.google.com/maps"] {
                         display: none !important;
                     }
@@ -307,7 +327,46 @@ export default function Gamification() {
                         display: none !important;
                     }
                     .gm-bundled-control .gmnoprint {
-                        display: block !important; /* Mantém controles custom se houver */
+                        display: block !important;
+                    }
+                    
+                    /* EFEITO DE "CARD QUEBRADO" PARA TERRITÓRIOS PERDIDOS */
+                    .card-broken {
+                        position: relative;
+                        overflow: hidden;
+                        background-color: theme('colors.red.50');
+                        border-color: theme('colors.red.300') !important;
+                        box-shadow: inset 0 4px 6px -1px rgb(0 0 0 / 0.1), inset 0 2px 4px -2px rgb(0 0 0 / 0.1) !important;
+                    }
+                    /* Fissura principal */
+                    .card-broken::before {
+                        content: '';
+                        position: absolute;
+                        top: -20%;
+                        left: -20%;
+                        width: 140%;
+                        height: 140%;
+                        background: linear-gradient(135deg, transparent 48%, theme('colors.red.900') 48%, theme('colors.red.900') 52%, transparent 52%);
+                        opacity: 0.15;
+                        pointer-events: none;
+                        transition: all 0.3s ease;
+                    }
+                    /* Fissura secundária */
+                    .card-broken::after {
+                         content: '';
+                         position: absolute;
+                         top: 40%;
+                         left: -20%;
+                         width: 150%;
+                         height: 2px;
+                         background: theme('colors.red.800');
+                         opacity: 0.2;
+                         transform: rotate(-25deg);
+                         pointer-events: none;
+                    }
+                    .card-broken:hover::before, .card-broken:hover::after {
+                        opacity: 0.3;
+                        transform: scale(1.02) rotate(1deg);
                     }
                 `}
             </style>
@@ -376,15 +435,11 @@ export default function Gamification() {
                                 zoom={14}
                                 onLoad={onLoad}
                                 onUnmount={onUnmount}
-                                options={mapOptions}
+                                options={mapOptions} // Usa os estilos ESCUROS definidos
                             >
                                 {/* Radar do Jogador */}
                                 {userLocation && (
-                                    <OverlayView 
-                                        position={userLocation} 
-                                        mapPaneName={OverlayView.OVERLAY_MOUSE_TARGET} 
-                                        getPixelPositionOffset={getPlayerPixelOffset}
-                                    >
+                                    <OverlayView position={userLocation} mapPaneName={OverlayView.OVERLAY_MOUSE_TARGET} getPixelPositionOffset={(w, h) => ({ x: -20, y: -20 })}>
                                         <div className="relative w-10 h-10 flex items-center justify-center pointer-events-none">
                                             <div className="absolute w-[200%] h-[200%] border border-green-500/30 rounded-full animate-ping"></div>
                                             <div className="w-4 h-4 bg-green-500 rounded-full border-2 border-white shadow-[0_0_15px_#22c55e] z-10"></div>
@@ -394,12 +449,7 @@ export default function Gamification() {
 
                                 {/* Pins dos Mercados */}
                                 {marketPins.map(pin => (
-                                    <OverlayView 
-                                        key={pin.id} 
-                                        position={{ lat: pin.latitude, lng: pin.longitude }} 
-                                        mapPaneName={OverlayView.OVERLAY_MOUSE_TARGET} 
-                                        getPixelPositionOffset={getPixelPositionOffset}
-                                    >
+                                    <OverlayView key={pin.id} position={{ lat: pin.latitude, lng: pin.longitude }} mapPaneName={OverlayView.OVERLAY_MOUSE_TARGET} getPixelPositionOffset={(w, h) => ({ x: 0, y: 0 })}>
                                         <GamificationMarker pin={pin} onClick={() => setSelectedMarket(pin)} />
                                     </OverlayView>
                                 ))}
@@ -412,7 +462,7 @@ export default function Gamification() {
                     </div>
                 </div>
 
-                {/* 2. MEUS TERRITÓRIOS (SCROLL HORIZONTAL) */}
+                {/* 2. MEUS TERRITÓRIOS (SCROLL HORIZONTAL) - MODIFICADO */}
                 {territories.length > 0 && (
                     <section>
                         <div className="flex items-center gap-2 mb-3 px-1">
@@ -425,14 +475,41 @@ export default function Gamification() {
                                 <div
                                     key={t.market_id}
                                     onClick={() => navigate(`/ver-mercado/${t.market_id}`)}
-                                    className="snap-center shrink-0 w-28 h-28 bg-white rounded-2xl border border-yellow-200 shadow-sm flex flex-col items-center justify-center p-2 text-center relative overflow-hidden group cursor-pointer hover:border-yellow-400 hover:shadow-md transition-all"
+                                    className={cn(
+                                        "snap-center shrink-0 w-28 h-28 rounded-2xl flex flex-col items-center justify-center p-2 text-center relative overflow-hidden group cursor-pointer transition-all border shadow-sm",
+                                        t.is_current_sovereign
+                                            ? "bg-white border-yellow-200 hover:border-yellow-400 hover:shadow-md"
+                                            : "card-broken" // Aplica o estilo de vidro quebrado
+                                    )}
                                 >
-                                    <div className="absolute top-0 right-0 bg-yellow-100 text-yellow-800 text-[8px] font-bold px-1.5 py-0.5 rounded-bl-lg">TOP 1</div>
-                                    <div className="w-10 h-10 bg-gradient-to-br from-yellow-100 to-white rounded-full flex items-center justify-center mb-2 shadow-sm border border-yellow-50">
-                                        <Crown className="w-5 h-5 text-yellow-600" />
+                                    {/* Badge Superior Ajustada (Top 1 / Perdido) */}
+                                    <div className={cn(
+                                        "absolute top-1 right-1 text-[8px] font-bold px-1.5 py-0.5 rounded-bl-lg z-10",
+                                        t.is_current_sovereign ? "bg-yellow-100 text-yellow-800" : "bg-red-100 text-red-800"
+                                    )}>
+                                        {t.is_current_sovereign ? "TOP 1" : "PERDIDO"}
                                     </div>
-                                    <h4 className="font-bold text-[10px] text-gray-800 line-clamp-2 leading-tight mb-1">{t.market_name}</h4>
-                                    <span className="text-[9px] text-gray-500 font-mono bg-gray-50 px-1.5 rounded">{t.score} pts</span>
+
+                                    {/* Icone Central */}
+                                    <div className={cn(
+                                        "w-10 h-10 rounded-full flex items-center justify-center mb-2 shadow-sm border relative z-10",
+                                        t.is_current_sovereign
+                                            ? "bg-gradient-to-br from-yellow-100 to-white border-yellow-50"
+                                            : "bg-red-100/80 border-red-200"
+                                    )}>
+                                        {t.is_current_sovereign ? (
+                                            <Crown className="w-5 h-5 text-yellow-600" />
+                                        ) : (
+                                            <HeartCrack className="w-5 h-5 text-red-600 drop-shadow-sm" />
+                                        )}
+                                    </div>
+
+                                    <h4 className={cn("font-bold text-[10px] line-clamp-2 leading-tight mb-1 relative z-10", t.is_current_sovereign ? "text-gray-800" : "text-red-950")}>
+                                        {t.market_name}
+                                    </h4>
+                                    <span className={cn("text-[9px] font-mono px-1.5 rounded relative z-10", t.is_current_sovereign ? "text-gray-500 bg-gray-50" : "text-red-700 bg-red-200/50 font-bold")}>
+                                        {t.score} pts
+                                    </span>
                                 </div>
                             ))}
                         </div>
@@ -499,7 +576,7 @@ export default function Gamification() {
                     </div>
                 </section>
 
-                {/* 5. RANKING (CLEAN) */}
+                {/* 5. RANKING (CLEAN) - CORRIGIDO IMAGENS ESTICADAS */}
                 <section className="pb-6">
                     <div className="flex items-center gap-2 mb-3 px-1">
                         <Flame className="w-5 h-5 text-gray-400" />
@@ -513,8 +590,9 @@ export default function Gamification() {
                                     <div key={player.user_id} className={cn("flex items-center justify-between p-3", player.user_id === user?.id ? "bg-blue-50/50" : "")}>
                                         <div className="flex items-center gap-3">
                                             <span className={cn("font-bold w-4 text-center text-xs", idx < 3 ? "text-gray-900" : "text-gray-400")}>{idx + 1}</span>
-                                            <Avatar className="w-8 h-8 border border-gray-100">
-                                                <AvatarImage src={player.avatar_url} />
+                                            {/* CORREÇÃO AQUI: Avatar com overflow hidden e imagem com object-cover */}
+                                            <Avatar className="w-8 h-8 border border-gray-100 overflow-hidden">
+                                                <AvatarImage src={player.avatar_url} className="w-full h-full object-cover" />
                                                 <AvatarFallback className="text-xs bg-gray-100 text-gray-500">{player.display_name?.[0]}</AvatarFallback>
                                             </Avatar>
                                             <span className={cn("text-xs font-medium truncate max-w-[140px]", player.user_id === user?.id ? "text-blue-700 font-bold" : "text-gray-600")}>
