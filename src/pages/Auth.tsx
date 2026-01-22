@@ -1,12 +1,11 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { ShoppingCart, Leaf, Mail, Lock, ArrowRight, Loader2, MapPin } from "lucide-react";
+import { ShoppingCart, Leaf, Mail, Lock, ArrowRight, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { z } from "zod";
-import { checkLocationEligibility } from "@/lib/geocoding";
 import { supabase } from "@/integrations/supabase/client";
 
 const authSchema = z.object({
@@ -19,23 +18,20 @@ export default function Auth() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
-  const [verifyingLocation, setVerifyingLocation] = useState(false);
 
   const { signIn, signUp } = useAuth();
   const navigate = useNavigate();
   const { toast } = useToast();
 
   const handleSignUpCheck = async () => {
-    setVerifyingLocation(true);
-
     try {
       // 1. Verificar limite de usuários (100 vagas)
+      // Mantivemos esta checagem de segurança, mas removemos a restrição de cidade
       const { data: userCount, error: countError } = await supabase.rpc('get_beta_user_count');
 
       if (countError) {
         console.error("Erro ao verificar contagem:", countError);
-        // Em caso de erro técnico, permitimos tentar para não bloquear erroneamente, 
-        // o banco irá barrar se necessário.
+        // Em caso de erro técnico, permitimos tentar
       } else if (typeof userCount === 'number' && userCount >= 100) {
         toast({
           title: "Vagas Esgotadas no Momento",
@@ -43,56 +39,14 @@ export default function Auth() {
           variant: "destructive",
           duration: 6000,
         });
-        setVerifyingLocation(false);
         return false;
       }
 
-      // 2. Verificar Geolocalização (Santos e São Vicente)
-      if (!("geolocation" in navigator)) {
-        toast({
-          title: "Localização Necessária",
-          description: "Seu navegador não suporta geolocalização. Precisamos confirmar que você é de Santos ou São Vicente.",
-          variant: "destructive",
-        });
-        setVerifyingLocation(false);
-        return false;
-      }
-
-      return new Promise<boolean>((resolve) => {
-        navigator.geolocation.getCurrentPosition(
-          async (position) => {
-            const { latitude, longitude } = position.coords;
-            const { eligible, city } = await checkLocationEligibility(latitude, longitude);
-
-            if (eligible) {
-              setVerifyingLocation(false);
-              resolve(true);
-            } else {
-              setVerifyingLocation(false);
-              toast({
-                title: `Olá, vizinho de ${city}!`,
-                description: `Em breve o Lista Certa vai chegar em sua cidade. Estamos no início da operação e validando tudo para entregar o melhor para Santos e São Vicente primeiro.`,
-                duration: 8000,
-              });
-              resolve(false);
-            }
-          },
-          (error) => {
-            console.error(error);
-            setVerifyingLocation(false);
-            toast({
-              title: "Erro de Localização",
-              description: "Precisamos da sua localização para confirmar que você está na área de atendimento (Santos e SV).",
-              variant: "destructive",
-            });
-            resolve(false);
-          }
-        );
-      });
+      // Geolocalização removida para liberar acesso geral
+      return true;
 
     } catch (error) {
       console.error(error);
-      setVerifyingLocation(false);
       return false;
     }
   };
@@ -112,13 +66,16 @@ export default function Auth() {
       return;
     }
 
+    setLoading(true);
+
     // Se for cadastro, faz as verificações antes
     if (!isLogin) {
       const canProceed = await handleSignUpCheck();
-      if (!canProceed) return;
+      if (!canProceed) {
+        setLoading(false);
+        return;
+      }
     }
-
-    setLoading(true);
 
     try {
       if (isLogin) {
@@ -195,7 +152,7 @@ export default function Auth() {
             <p className="text-sm text-muted-foreground mb-6">
               {isLogin
                 ? "Faça login para acessar suas listas"
-                : "Exclusivo para Santos e São Vicente (Beta)"}
+                : "Crie sua conta para começar"}
             </p>
 
             <form onSubmit={handleSubmit} className="space-y-4">
@@ -228,28 +185,13 @@ export default function Auth() {
                 </div>
               </div>
 
-              {/* Mensagem de alerta sobre localização no modo cadastro */}
-              {!isLogin && (
-                <div className="bg-primary/10 p-3 rounded-lg flex gap-2 items-start text-xs text-primary">
-                  <MapPin className="w-4 h-4 shrink-0 mt-0.5" />
-                  <p>
-                    Iremos verificar sua localização. Apenas 100 vagas disponíveis para Santos e SV.
-                  </p>
-                </div>
-              )}
-
               <Button
                 type="submit"
                 className="w-full h-12"
                 size="lg"
-                disabled={loading || verifyingLocation}
+                disabled={loading}
               >
-                {verifyingLocation ? (
-                  <>
-                    <Loader2 className="w-5 h-5 animate-spin mr-2" />
-                    Verificando região...
-                  </>
-                ) : loading ? (
+                {loading ? (
                   <Loader2 className="w-5 h-5 animate-spin" />
                 ) : (
                   <>
