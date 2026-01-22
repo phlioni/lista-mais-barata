@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { GoogleMap, useJsApiLoader, OverlayView } from "@react-google-maps/api";
 import {
@@ -70,6 +70,10 @@ const darkMapStyle = [
 ];
 
 const mapContainerStyle = { width: '100%', height: '100%' };
+
+// --- CORREÇÃO 1: Função de offset estática para evitar re-renderização e "piscadas" nos pins ---
+const getPixelPositionOffset = (width: number, height: number) => ({ x: 0, y: 0 });
+const getPlayerPixelOffset = (width: number, height: number) => ({ x: -20, y: -20 });
 
 // --- Interfaces ---
 interface MarketPinData {
@@ -174,6 +178,17 @@ export default function Gamification() {
     const onLoad = useCallback((map: google.maps.Map) => setMap(map), []);
     const onUnmount = useCallback(() => setMap(null), []);
 
+    // --- CORREÇÃO 2: Memoizar as opções para evitar re-render do mapa e remover atalhos ---
+    const mapOptions = useMemo(() => ({
+        styles: darkMapStyle,
+        disableDefaultUI: true, // Remove UI padrão
+        clickableIcons: false,
+        zoomControl: false,
+        keyboardShortcuts: false, // Remove "Keyboard shortcuts"
+        gestureHandling: "greedy",
+        backgroundColor: "#1e293b"
+    }), []);
+
     // Geolocalização
     useEffect(() => {
         if (navigator.geolocation) {
@@ -275,6 +290,27 @@ export default function Gamification() {
 
     return (
         <div className="min-h-screen bg-gray-50 pb-32">
+            {/* CSS INJETADO PARA REMOVER LEGENDAS DO MAPA (Map Data, Terms, Google Logo) */}
+            <style>
+                {`
+                    .gmnoprint a, .gmnoprint span, .gm-style-cc {
+                        display: none !important;
+                    }
+                    .gmnoprint div {
+                        background: none !important;
+                    }
+                    /* Oculta logotipo do Google se desejar (Cuidado: Pode violar TOS se for app público) */
+                    a[href^="http://maps.google.com/maps"] {
+                        display: none !important;
+                    }
+                    a[href^="https://maps.google.com/maps"] {
+                        display: none !important;
+                    }
+                    .gm-bundled-control .gmnoprint {
+                        display: block !important; /* Mantém controles custom se houver */
+                    }
+                `}
+            </style>
 
             {/* Header Simples */}
             <header className="px-6 pt-6 pb-2 bg-white sticky top-0 z-30 border-b border-gray-100">
@@ -340,18 +376,15 @@ export default function Gamification() {
                                 zoom={14}
                                 onLoad={onLoad}
                                 onUnmount={onUnmount}
-                                options={{
-                                    styles: darkMapStyle,
-                                    disableDefaultUI: true, // Mapa limpo
-                                    clickableIcons: false,
-                                    zoomControl: false,
-                                    gestureHandling: "greedy",
-                                    backgroundColor: "#1e293b"
-                                }}
+                                options={mapOptions}
                             >
                                 {/* Radar do Jogador */}
                                 {userLocation && (
-                                    <OverlayView position={userLocation} mapPaneName={OverlayView.OVERLAY_MOUSE_TARGET} getPixelPositionOffset={(w, h) => ({ x: -20, y: -20 })}>
+                                    <OverlayView 
+                                        position={userLocation} 
+                                        mapPaneName={OverlayView.OVERLAY_MOUSE_TARGET} 
+                                        getPixelPositionOffset={getPlayerPixelOffset}
+                                    >
                                         <div className="relative w-10 h-10 flex items-center justify-center pointer-events-none">
                                             <div className="absolute w-[200%] h-[200%] border border-green-500/30 rounded-full animate-ping"></div>
                                             <div className="w-4 h-4 bg-green-500 rounded-full border-2 border-white shadow-[0_0_15px_#22c55e] z-10"></div>
@@ -361,7 +394,12 @@ export default function Gamification() {
 
                                 {/* Pins dos Mercados */}
                                 {marketPins.map(pin => (
-                                    <OverlayView key={pin.id} position={{ lat: pin.latitude, lng: pin.longitude }} mapPaneName={OverlayView.OVERLAY_MOUSE_TARGET} getPixelPositionOffset={(w, h) => ({ x: 0, y: 0 })}>
+                                    <OverlayView 
+                                        key={pin.id} 
+                                        position={{ lat: pin.latitude, lng: pin.longitude }} 
+                                        mapPaneName={OverlayView.OVERLAY_MOUSE_TARGET} 
+                                        getPixelPositionOffset={getPixelPositionOffset}
+                                    >
                                         <GamificationMarker pin={pin} onClick={() => setSelectedMarket(pin)} />
                                     </OverlayView>
                                 ))}
