@@ -11,6 +11,7 @@ import {
     ChevronRight,
     ShieldAlert,
     TrendingUp,
+    TrendingDown,
     AlertTriangle,
     Crown,
     X,
@@ -62,6 +63,7 @@ import {
     TableRow,
 } from "@/components/ui/table";
 import { useToast } from "@/hooks/use-toast";
+import { ScrollArea } from "@/components/ui/scroll-area"; // Adicionado para o scroll do modal
 
 // --- CONFIGURAÇÃO DO MAPA (DARK MODE) ---
 const darkMapStyle = [
@@ -78,6 +80,18 @@ const darkMapStyle = [
 ];
 
 const mapContainerStyle = { width: '100%', height: '100%' };
+
+// Função auxiliar de distância
+const calculateDistanceJS = (lat1: number, lon1: number, lat2: number, lon2: number) => {
+    if (!lat1 || !lon1 || !lat2 || !lon2) return "...";
+    const R = 6371; // km
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+    const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+        Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return (R * c).toFixed(1);
+};
 
 // --- CORREÇÃO 1: Função de offset estática ---
 const getPixelPositionOffset = (width: number, height: number) => ({ x: 0, y: 0 });
@@ -97,6 +111,7 @@ interface MarketPinData {
     };
     myScore: number;
     status: 'sovereign' | 'hostile' | 'neutral';
+    priceLevel?: 'cheap' | 'moderate' | 'expensive';
 }
 
 interface LeaderboardItem {
@@ -150,19 +165,55 @@ const GamificationMarker = ({ pin, onClick }: { pin: MarketPinData, onClick: () 
     const isMe = pin.status === 'sovereign';
     const isHostile = pin.status === 'hostile';
 
-    let colorClass = isMe ? "border-yellow-500 shadow-yellow-500/50" : isHostile ? "border-rose-500 shadow-rose-500/50" : "border-slate-400 shadow-slate-500/50";
-    let icon = isMe ? <Crown className="w-3 h-3 text-yellow-500" /> : isHostile ? <User className="w-3 h-3 text-rose-500" /> : <Crosshair className="w-3 h-3 text-slate-400" />;
+    let borderColor = "border-slate-400";
+    let shadowColor = "shadow-slate-500/50";
+    let iconColor = "text-slate-400";
+
+    if (isMe) {
+        borderColor = "border-yellow-500";
+        shadowColor = "shadow-yellow-500/50";
+        iconColor = "text-yellow-500";
+    } else if (isHostile) {
+        borderColor = "border-rose-500";
+        shadowColor = "shadow-rose-500/50";
+        iconColor = "text-rose-500";
+    } else if (pin.priceLevel === 'cheap') {
+        borderColor = "border-emerald-500";
+        shadowColor = "shadow-emerald-500/50";
+        iconColor = "text-emerald-500";
+    } else if (pin.priceLevel === 'expensive') {
+        borderColor = "border-orange-500";
+        shadowColor = "shadow-orange-500/50";
+        iconColor = "text-orange-500";
+    }
 
     return (
         <div className="absolute -translate-x-1/2 -translate-y-full cursor-pointer group z-10 hover:z-50" onClick={(e) => { e.stopPropagation(); onClick(); }}>
+            {/* Badge de Preço */}
+            {pin.priceLevel && !isMe && !isHostile && (
+                <div className={cn(
+                    "absolute -top-6 left-1/2 -translate-x-1/2 px-1.5 py-0.5 rounded text-[8px] font-bold text-white whitespace-nowrap shadow-sm opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none",
+                    pin.priceLevel === 'cheap' ? "bg-emerald-600" : pin.priceLevel === 'expensive' ? "bg-orange-600" : "bg-slate-600"
+                )}>
+                    {pin.priceLevel === 'cheap' ? "💲 Barato" : pin.priceLevel === 'expensive' ? "💲💲 Caro" : "💲 Normal"}
+                </div>
+            )}
+
             {/* Avatar/Icone do Pin */}
-            <div className={cn("w-8 h-8 rounded-full border-2 bg-slate-900 flex items-center justify-center shadow-lg transition-transform group-hover:scale-125", colorClass)}>
+            <div className={cn("w-8 h-8 rounded-full border-2 bg-slate-900 flex items-center justify-center shadow-lg transition-transform group-hover:scale-125", borderColor, shadowColor)}>
                 {isHostile && pin.sovereign.avatar ? (
-                    <img src={pin.sovereign.avatar} className="w-full h-full rounded-full object-cover" />
-                ) : icon}
+                    <div className="w-full h-full rounded-full overflow-hidden">
+                        <img src={pin.sovereign.avatar} className="w-full h-full object-cover" />
+                    </div>
+                ) : (
+                    isMe ? <Crown className={cn("w-4 h-4", iconColor)} /> :
+                        isHostile ? <User className={cn("w-4 h-4", iconColor)} /> :
+                            pin.priceLevel === 'cheap' ? <TrendingDown className={cn("w-4 h-4", iconColor)} /> :
+                                <Crosshair className={cn("w-4 h-4", iconColor)} />
+                )}
             </div>
             {/* Triângulo Base */}
-            <div className={cn("w-0 h-0 border-l-[4px] border-l-transparent border-r-[4px] border-r-transparent border-t-[6px] absolute left-1/2 -translate-x-1/2 -bottom-1.5", isMe ? "border-t-yellow-500" : isHostile ? "border-t-rose-500" : "border-t-slate-400")}></div>
+            <div className={cn("w-0 h-0 border-l-[4px] border-l-transparent border-r-[4px] border-r-transparent border-t-[6px] absolute left-1/2 -translate-x-1/2 -bottom-1.5 border-t-slate-600")}></div>
         </div>
     );
 };
@@ -187,11 +238,14 @@ export default function Gamification() {
     const [territories, setTerritories] = useState<Territory[]>([]);
     const [marketPins, setMarketPins] = useState<MarketPinData[]>([]);
 
-    // Cesta da Vizinhança (Antigo Supply Drop)
+    // Cesta da Vizinhança
     const [hasActiveList, setHasActiveList] = useState(true);
     const [supplyDropOpen, setSupplyDropOpen] = useState(false);
     const [supplyItems, setSupplyItems] = useState<SupplyDropItem[]>([]);
     const [claimingSupply, setClaimingSupply] = useState(false);
+
+    // Ranking Completo
+    const [showFullRanking, setShowFullRanking] = useState(false); // NOVO STATE
 
     // UI
     const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null);
@@ -213,7 +267,7 @@ export default function Gamification() {
         clickableIcons: false,
         zoomControl: false,
         keyboardShortcuts: false, // Remove "Keyboard shortcuts"
-        gestureHandling: "greedy",
+        gestureHandling: "cooperative", // Mudança importante para scroll
         backgroundColor: "#1e293b"
     }), []);
 
@@ -248,10 +302,9 @@ export default function Gamification() {
                 supabase.from('shopping_lists').select('id').eq('user_id', user!.id).eq('status', 'open').limit(1)
             ]);
 
-            // Checar se tem lista ativa (Para exibir a Cesta da Vizinhança)
+            // Checar se tem lista ativa
             setHasActiveList(activeListsResult.data && activeListsResult.data.length > 0 ? true : false);
 
-            // Processar Ranking e Pontos
             if (rankingResult.data) {
                 // @ts-ignore
                 setLeaderboard(rankingResult.data || []);
@@ -261,7 +314,20 @@ export default function Gamification() {
             }
             setMyPoints(pointsResult.data || 0);
 
-            // Processar Pins do Mapa
+            // Carregar Intel de Preço
+            let marketIntel: any[] = [];
+            if (userLocation) {
+                try {
+                    const { data: intelData } = await supabase.rpc('get_market_intel', {
+                        user_lat: userLocation.lat,
+                        user_lon: userLocation.lng
+                    });
+                    if (intelData) marketIntel = intelData;
+                } catch (e) {
+                    console.log("Intel indisponível");
+                }
+            }
+
             if (marketsResult.data && scoresResult.data) {
                 // @ts-ignore
                 const pins: MarketPinData[] = marketsResult.data.map((m: any) => {
@@ -275,6 +341,8 @@ export default function Gamification() {
                     let status: MarketPinData['status'] = 'neutral';
                     if (leader) status = leader.user_id === user!.id ? 'sovereign' : 'hostile';
 
+                    const intel = marketIntel.find((i: any) => i.market_id === m.id);
+
                     return {
                         id: m.id,
                         name: m.name,
@@ -287,7 +355,8 @@ export default function Gamification() {
                             score: leader?.score || 0
                         },
                         myScore: myScore,
-                        status: status
+                        status: status,
+                        priceLevel: intel?.price_level
                     };
                 });
                 setMarketPins(pins);
@@ -312,7 +381,6 @@ export default function Gamification() {
                 setTerritories(processedTerritories);
             }
 
-            // Processar Outros Dados
             // @ts-ignore
             if (alertsResult.data) setAlerts(alertsResult.data.map((a: any) => ({ id: a.id, product_name: a.product_name, price: a.price, market_name: a.markets?.name || 'Mercado', created_at: a.created_at })) || []);
             // @ts-ignore
@@ -332,22 +400,23 @@ export default function Gamification() {
         await supabase.from('notifications').update({ read: true }).eq('id', id);
     };
 
-    // --- CESTA DA VIZINHANÇA (Antigo Supply Drop) ---
     const handleOpenSupplyDrop = async () => {
         setSupplyDropOpen(true);
         if (supplyItems.length > 0) return;
 
         if (userLocation) {
-            // Chama a RPC que criamos (agora com calculate_distance funcionando)
-            const { data, error } = await supabase.rpc('get_regional_trends', {
-                user_lat: userLocation.lat,
-                user_lon: userLocation.lng,
-                radius_km: 10
-            });
-
-            if (data) {
-                // @ts-ignore
-                setSupplyItems(data);
+            try {
+                const { data } = await supabase.rpc('get_regional_trends', {
+                    user_lat: userLocation.lat,
+                    user_lon: userLocation.lng,
+                    radius_km: 10
+                });
+                if (data) {
+                    // @ts-ignore
+                    setSupplyItems(data);
+                }
+            } catch (e) {
+                console.error("Erro ao buscar cesta", e);
             }
         }
     };
@@ -357,10 +426,8 @@ export default function Gamification() {
         setClaimingSupply(true);
 
         try {
-            // 1. Criar Lista
             const now = new Date();
             const listName = `Cesta da Vizinhança ${now.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })}`;
-
             const { data: newList, error: listError } = await supabase
                 .from('shopping_lists')
                 .insert({ name: listName, user_id: user.id, status: 'open' })
@@ -369,7 +436,6 @@ export default function Gamification() {
 
             if (listError) throw listError;
 
-            // 2. Inserir Itens
             const itemsToInsert = supplyItems.map(item => ({
                 list_id: newList.id,
                 product_id: item.product_id,
@@ -401,7 +467,7 @@ export default function Gamification() {
     const handleStartRecording = async () => {
         try {
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            streamRef.current = stream; // Salva para matar depois
+            streamRef.current = stream;
 
             const recorder = new MediaRecorder(stream);
             mediaRecorderRef.current = recorder;
@@ -416,10 +482,7 @@ export default function Gamification() {
             recorder.onstop = handleProcessRecording;
             recorder.start();
             setIsRecording(true);
-
-            // Feedback tátil
             if (navigator.vibrate) navigator.vibrate(50);
-
         } catch (error) {
             console.error("Erro ao acessar microfone:", error);
             toast({
@@ -456,7 +519,6 @@ export default function Gamification() {
             try {
                 toast({ title: "Ouvindo...", description: "Processando seus itens." });
 
-                // 1. Transcrever (Whisper)
                 const { data: transcriptData, error: transcriptError } = await supabase.functions.invoke('transcribe-audio', {
                     body: { audioBase64: base64Audio }
                 });
@@ -467,7 +529,6 @@ export default function Gamification() {
                 const text = transcriptData.text;
                 toast({ title: "Entendido!", description: `Criando lista com: "${text.substring(0, 20)}..."` });
 
-                // 2. Estruturar Lista (GPT-4o)
                 const { data: aiData, error: aiError } = await supabase.functions.invoke('parse-smart-list', {
                     body: { text }
                 });
@@ -475,7 +536,6 @@ export default function Gamification() {
                 if (aiError) throw aiError;
                 if (!aiData.items || aiData.items.length === 0) throw new Error("Nenhum item identificado.");
 
-                // 3. Criar a Lista no Banco (Com hora para evitar duplicidade)
                 const now = new Date();
                 const timeStr = now.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
                 const listName = `Lista de Voz ${now.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })} ${timeStr}`;
@@ -488,7 +548,6 @@ export default function Gamification() {
 
                 if (createListError) throw createListError;
 
-                // 4. Match & Insert Items (RPC)
                 const { data: processedItems, error: dbError } = await supabase
                     .rpc('match_and_create_products', {
                         items_in: aiData.items
@@ -496,7 +555,6 @@ export default function Gamification() {
 
                 if (dbError) throw dbError;
 
-                // 5. Inserir Itens na Lista (Fallback quantity = 1)
                 const listItemsToInsert = (processedItems as any[]).map(item => ({
                     list_id: newList.id,
                     product_id: item.product_id,
@@ -531,10 +589,21 @@ export default function Gamification() {
         };
     };
 
-    if (authLoading) return <div className="min-h-screen flex items-center justify-center"><Loader2 className="w-10 h-10 animate-spin text-primary" /></div>;
+    // UseMemo para evitar re-render dos marcadores
+    const markersComponent = useMemo(() => {
+        return marketPins.map(pin => (
+            <OverlayView
+                key={pin.id}
+                position={{ lat: pin.latitude, lng: pin.longitude }}
+                mapPaneName={OverlayView.OVERLAY_MOUSE_TARGET}
+                getPixelPositionOffset={(w, h) => ({ x: 0, y: 0 })}
+            >
+                <GamificationMarker pin={pin} onClick={() => setSelectedMarket(pin)} />
+            </OverlayView>
+        ));
+    }, [marketPins]);
 
-    const topThree = leaderboard.slice(0, 3);
-    const restOfRanking = leaderboard.slice(3, 10);
+    if (authLoading) return <div className="min-h-screen flex items-center justify-center"><Loader2 className="w-10 h-10 animate-spin text-primary" /></div>;
 
     return (
         <div className="min-h-screen bg-gray-50 pb-32">
@@ -626,7 +695,7 @@ export default function Gamification() {
             <main className="px-4 pt-6 space-y-6">
 
                 {/* 1. CARD PRINCIPAL: MAPA TÁTICO & STATUS */}
-                <div className="relative rounded-3xl overflow-hidden bg-slate-900 text-white shadow-xl h-80 border border-slate-800">
+                <div className="relative rounded-3xl overflow-hidden bg-slate-900 text-white shadow-xl h-80 border border-slate-800 shrink-0">
 
                     {/* Header de Status (Sobreposto ao Mapa) */}
                     <div className="absolute top-0 left-0 right-0 p-5 z-20 bg-gradient-to-b from-slate-950/90 to-transparent pointer-events-none">
@@ -714,12 +783,8 @@ export default function Gamification() {
                                     </OverlayView>
                                 )}
 
-                                {/* Pins dos Mercados */}
-                                {marketPins.map(pin => (
-                                    <OverlayView key={pin.id} position={{ lat: pin.latitude, lng: pin.longitude }} mapPaneName={OverlayView.OVERLAY_MOUSE_TARGET} getPixelPositionOffset={(w, h) => ({ x: 0, y: 0 })}>
-                                        <GamificationMarker pin={pin} onClick={() => setSelectedMarket(pin)} />
-                                    </OverlayView>
-                                ))}
+                                {/* Pins dos Mercados (Memoizados) */}
+                                {markersComponent}
                             </GoogleMap>
                         ) : (
                             <div className="h-full w-full flex items-center justify-center text-slate-500">
@@ -869,7 +934,49 @@ export default function Gamification() {
                                     </div>
                                 ))}
                                 <div className="p-2 text-center bg-gray-50/50">
-                                    <Button variant="ghost" size="sm" className="text-[10px] text-gray-400 h-6 w-full hover:bg-transparent hover:text-gray-600">Ver ranking completo</Button>
+                                    <Dialog open={showFullRanking} onOpenChange={setShowFullRanking}>
+                                        <DialogTrigger asChild>
+                                            <Button variant="ghost" size="sm" className="text-[10px] text-gray-400 h-6 w-full hover:bg-transparent hover:text-gray-600">Ver ranking completo</Button>
+                                        </DialogTrigger>
+                                        <DialogContent className="max-h-[80vh] flex flex-col p-0 gap-0 overflow-hidden rounded-2xl">
+                                            <DialogHeader className="p-4 border-b border-border/50">
+                                                <DialogTitle className="flex items-center gap-2">
+                                                    <Trophy className="w-5 h-5 text-yellow-500" />
+                                                    Ranking Completo
+                                                </DialogTitle>
+                                            </DialogHeader>
+                                            <ScrollArea className="flex-1 p-0">
+                                                <div className="divide-y divide-gray-100">
+                                                    {leaderboard.map((player, idx) => (
+                                                        <div key={player.user_id} className={cn("flex items-center justify-between p-4", player.user_id === user?.id ? "bg-blue-50" : "")}>
+                                                            <div className="flex items-center gap-3">
+                                                                <div className={cn("font-bold w-6 text-center text-sm rounded-full h-6 flex items-center justify-center",
+                                                                    idx === 0 ? "bg-yellow-100 text-yellow-700" :
+                                                                        idx === 1 ? "bg-gray-100 text-gray-700" :
+                                                                            idx === 2 ? "bg-orange-100 text-orange-700" : "text-gray-500"
+                                                                )}>
+                                                                    {idx + 1}
+                                                                </div>
+                                                                <Avatar className="w-10 h-10 border border-gray-100 overflow-hidden">
+                                                                    <AvatarImage src={player.avatar_url} className="w-full h-full object-cover" />
+                                                                    <AvatarFallback>{player.display_name?.[0]}</AvatarFallback>
+                                                                </Avatar>
+                                                                <div>
+                                                                    <p className={cn("text-sm font-bold", player.user_id === user?.id ? "text-blue-700" : "text-gray-700")}>
+                                                                        {player.display_name} {player.user_id === user?.id && "(Você)"}
+                                                                    </p>
+                                                                    <p className="text-[10px] text-gray-400">Guerreiro do Bairro</p>
+                                                                </div>
+                                                            </div>
+                                                            <Badge variant="secondary" className="font-mono text-xs">
+                                                                {player.total_points} pts
+                                                            </Badge>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            </ScrollArea>
+                                        </DialogContent>
+                                    </Dialog>
                                 </div>
                             </div>
                         ) : (
@@ -965,47 +1072,47 @@ export default function Gamification() {
             {/* SHEET DE DETALHES DO MAPA (PAINEL TÁTICO) */}
             <Sheet open={!!selectedMarket} onOpenChange={(open) => !open && setSelectedMarket(null)}>
                 <SheetContent side="bottom" className="rounded-t-3xl border-t border-slate-800 bg-slate-900 p-0 text-white z-[60]">
-                    <SheetHeader className="sr-only"><SheetTitle>Detalhes da Arena</SheetTitle></SheetHeader>
+                    <SheetHeader className="sr-only"><SheetTitle>Detalhes do Mercado</SheetTitle></SheetHeader>
                     {selectedMarket && (
                         <>
-                            <div className={cn("h-24 w-full relative overflow-hidden rounded-t-3xl bg-gradient-to-b from-indigo-900/40 to-slate-900")}>
-                                <div className="absolute top-4 left-6 z-10">
-                                    <h2 className="text-xl font-bold text-white drop-shadow-md">{selectedMarket.name}</h2>
-                                    <div className="flex items-center gap-2 mt-1"><MapPin className="w-3 h-3 text-slate-400" /><span className="text-xs text-slate-300">Mercado Local</span></div>
+                            <div className={cn("h-28 w-full relative overflow-hidden rounded-t-3xl bg-gradient-to-b from-indigo-900/40 to-slate-900")}>
+                                {/* Ajuste de padding-right (pr-12) e largura máxima para evitar colisão com botão de fechar */}
+                                <div className="absolute top-4 left-6 z-10 w-full pr-14">
+                                    <h2 className="text-xl font-bold text-white drop-shadow-md truncate max-w-full">{selectedMarket.name}</h2>
+                                    <div className="flex flex-wrap items-center gap-2 mt-1">
+                                        <div className="flex items-center gap-1">
+                                            <MapPin className="w-3 h-3 text-slate-400" />
+                                            <span className="text-xs text-slate-300">
+                                                {/* Uso seguro da função de distância */}
+                                                {userLocation ? `${calculateDistanceJS(userLocation.lat, userLocation.lng, selectedMarket.latitude, selectedMarket.longitude)} km` : "..."}
+                                            </span>
+                                        </div>
+                                        {selectedMarket.priceLevel && (
+                                            <Badge className={cn("text-[9px] h-4", selectedMarket.priceLevel === 'cheap' ? "bg-emerald-600" : selectedMarket.priceLevel === 'expensive' ? "bg-rose-600" : "bg-yellow-600")}>
+                                                {selectedMarket.priceLevel === 'cheap' ? "ECONÔMICO" : selectedMarket.priceLevel === 'expensive' ? "ALTO PADRÃO" : "MÉDIO"}
+                                            </Badge>
+                                        )}
+                                    </div>
                                 </div>
-                                <div className="absolute right-4 top-4">
-                                    {selectedMarket.status === 'sovereign' && <Badge className="bg-yellow-500 text-black border-none font-bold">DOMINADO</Badge>}
-                                    {selectedMarket.status === 'hostile' && <Badge className="bg-rose-600 text-white border-none">HOSTIL</Badge>}
-                                    {selectedMarket.status === 'neutral' && <Badge variant="outline" className="text-cyan-400 border-cyan-600">NEUTRO</Badge>}
+                                {/* Ajuste da posição das badges de status */}
+                                <div className="absolute right-4 top-10 flex flex-col gap-1 items-end">
+                                    {selectedMarket.status === 'sovereign' && <Badge className="bg-yellow-500 text-black border-none font-bold text-[9px]">DOMINADO</Badge>}
+                                    {selectedMarket.status === 'hostile' && <Badge className="bg-rose-600 text-white border-none text-[9px]">HOSTIL</Badge>}
                                 </div>
                             </div>
+
                             <div className="px-6 pb-8 -mt-6 relative z-20">
                                 <div className="bg-slate-800 border border-slate-700 p-4 rounded-2xl flex items-center justify-between shadow-xl mb-6">
                                     <div className="flex items-center gap-3">
                                         <div className="relative">
-                                            {selectedMarket.status === 'neutral' ? (
-                                                <div className="w-12 h-12 border-2 border-slate-600 rounded-full flex items-center justify-center bg-slate-700"><Ghost className="w-6 h-6 text-slate-500" /></div>
-                                            ) : (
-                                                <Avatar className={cn("w-12 h-12 border-2", selectedMarket.status === 'sovereign' ? "border-yellow-500" : "border-rose-600")}>
-                                                    <AvatarImage src={selectedMarket.sovereign.avatar || ""} />
-                                                    <AvatarFallback>S</AvatarFallback>
-                                                </Avatar>
-                                            )}
+                                            {selectedMarket.status === 'neutral' ? <div className="w-12 h-12 border-2 border-slate-600 rounded-full flex items-center justify-center bg-slate-700"><Ghost className="w-6 h-6 text-slate-500" /></div> : <Avatar className={cn("w-12 h-12 border-2", selectedMarket.status === 'sovereign' ? "border-yellow-500" : "border-rose-600")}><AvatarImage src={selectedMarket.sovereign.avatar || ""} /><AvatarFallback>S</AvatarFallback></Avatar>}
                                             {selectedMarket.status !== 'neutral' && <div className="absolute -bottom-1 -right-1 bg-black rounded-full p-0.5"><Crown className={cn("w-3 h-3", selectedMarket.status === 'sovereign' ? "text-yellow-500" : "text-rose-500")} /></div>}
                                         </div>
-                                        <div>
-                                            <p className="text-[10px] text-slate-400 uppercase tracking-wider font-bold">Soberano Atual</p>
-                                            <p className="text-sm font-bold text-white">{selectedMarket.sovereign.name}</p>
-                                        </div>
+                                        <div><p className="text-[10px] text-slate-400 uppercase tracking-wider font-bold">Soberano Atual</p><p className="text-sm font-bold text-white">{selectedMarket.sovereign.name}</p></div>
                                     </div>
-                                    <div className="text-right">
-                                        <p className="text-[10px] text-slate-400 uppercase font-bold">Pontos</p>
-                                        <p className="text-lg font-mono font-bold text-indigo-400">{selectedMarket.sovereign.score}</p>
-                                    </div>
+                                    <div className="text-right"><p className="text-[10px] text-slate-400 uppercase font-bold">Pontos</p><p className="text-lg font-mono font-bold text-indigo-400">{selectedMarket.sovereign.score}</p></div>
                                 </div>
-                                <Button className={cn("w-full h-14 text-lg font-bold rounded-2xl shadow-lg transition-transform active:scale-95", selectedMarket.status === 'sovereign' ? "bg-yellow-500 hover:bg-yellow-400 text-black" : "bg-indigo-600 hover:bg-indigo-500 text-white")} onClick={() => navigate(`/lista/nova`)}>
-                                    {selectedMarket.status === 'sovereign' ? <><Shield className="w-5 h-5 mr-2" /> MANTER DOMÍNIO</> : <><Swords className="w-5 h-5 mr-2" /> ATACAR AGORA</>}
-                                </Button>
+                                <Button className={cn("w-full h-14 text-lg font-bold rounded-2xl shadow-lg transition-transform active:scale-95", selectedMarket.status === 'sovereign' ? "bg-yellow-500 hover:bg-yellow-400 text-black" : "bg-indigo-600 hover:bg-indigo-500 text-white")} onClick={() => navigate(`/lista/nova`)}>{selectedMarket.status === 'sovereign' ? <><Shield className="w-5 h-5 mr-2" /> MANTER DOMÍNIO</> : <><Swords className="w-5 h-5 mr-2" /> ATACAR AGORA</>}</Button>
                                 <p className="text-center text-[10px] text-slate-500 mt-3">Criar uma lista neste mercado rende +100 pontos.</p>
                             </div>
                         </>
