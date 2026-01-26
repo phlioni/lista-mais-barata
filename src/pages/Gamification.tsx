@@ -22,8 +22,12 @@ import {
     Ghost,
     Crosshair,
     Shield,
-    ShoppingBasket,
-    HeartCrack // Adicionado
+    ShoppingBasket, // Usado para a Cesta da Vizinhança
+    HeartCrack,
+    Mic,
+    Square,
+    Medal,
+    Package
 } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Card, CardContent } from "@/components/ui/card";
@@ -40,6 +44,8 @@ import {
     DialogHeader,
     DialogTitle,
     DialogTrigger,
+    DialogDescription,
+    DialogFooter
 } from "@/components/ui/dialog";
 import {
     Sheet,
@@ -55,6 +61,7 @@ import {
     TableHeader,
     TableRow,
 } from "@/components/ui/table";
+import { useToast } from "@/hooks/use-toast";
 
 // --- CONFIGURAÇÃO DO MAPA (DARK MODE) ---
 const darkMapStyle = [
@@ -125,12 +132,17 @@ interface NotificationItem {
     read: boolean;
 }
 
-// Alterado para suportar a lógica de perda
 interface Territory {
     market_id: string;
     score: number;
     market_name: string;
     is_current_sovereign: boolean;
+}
+
+interface SupplyDropItem {
+    product_id: string;
+    product_name: string;
+    popularity: number;
 }
 
 // --- Componente: Marcador do Mapa ---
@@ -158,13 +170,14 @@ const GamificationMarker = ({ pin, onClick }: { pin: MarketPinData, onClick: () 
 export default function Gamification() {
     const navigate = useNavigate();
     const { user, loading: authLoading } = useAuth();
+    const { toast } = useToast();
     const apiKey = import.meta.env.VITE_GOOGLE_MAPS_KEY || "";
     const { isLoaded, loadError } = useJsApiLoader({ id: 'google-map-script', googleMapsApiKey: apiKey });
 
     const [map, setMap] = useState<google.maps.Map | null>(null);
     const [loading, setLoading] = useState(true);
 
-    // Dados
+    // Dados Gamificação
     const [leaderboard, setLeaderboard] = useState<LeaderboardItem[]>([]);
     const [myPoints, setMyPoints] = useState(0);
     const [myRank, setMyRank] = useState<number>(0);
@@ -174,14 +187,26 @@ export default function Gamification() {
     const [territories, setTerritories] = useState<Territory[]>([]);
     const [marketPins, setMarketPins] = useState<MarketPinData[]>([]);
 
+    // Cesta da Vizinhança (Antigo Supply Drop)
+    const [hasActiveList, setHasActiveList] = useState(true);
+    const [supplyDropOpen, setSupplyDropOpen] = useState(false);
+    const [supplyItems, setSupplyItems] = useState<SupplyDropItem[]>([]);
+    const [claimingSupply, setClaimingSupply] = useState(false);
+
     // UI
     const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null);
     const [selectedMarket, setSelectedMarket] = useState<MarketPinData | null>(null);
 
+    // --- LÓGICA DO RÁDIO DE MISSÃO ---
+    const [isRecording, setIsRecording] = useState(false);
+    const [isProcessingAudio, setIsProcessingAudio] = useState(false);
+    const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+    const audioChunksRef = useRef<Blob[]>([]);
+    const streamRef = useRef<MediaStream | null>(null);
+
     const onLoad = useCallback((map: google.maps.Map) => setMap(map), []);
     const onUnmount = useCallback(() => setMap(null), []);
 
-    // --- CORREÇÃO 2: Memoizar as opções para evitar re-render do mapa e remover atalhos ---
     const mapOptions = useMemo(() => ({
         styles: darkMapStyle,
         disableDefaultUI: true, // Remove UI padrão
@@ -211,7 +236,7 @@ export default function Gamification() {
     const loadData = async () => {
         if (leaderboard.length === 0) setLoading(true);
         try {
-            const [rankingResult, pointsResult, alertsResult, missionsResult, notifsResult, territoriesResult, marketsResult, scoresResult] = await Promise.all([
+            const [rankingResult, pointsResult, alertsResult, missionsResult, notifsResult, territoriesResult, marketsResult, scoresResult, activeListsResult] = await Promise.all([
                 supabase.rpc('get_monthly_leaderboard'),
                 supabase.rpc('get_my_monthly_points', { target_user_id: user!.id }),
                 supabase.from('price_alerts').select('id, product_name, price, created_at, markets(name)').order('created_at', { ascending: false }).limit(3),
@@ -219,8 +244,12 @@ export default function Gamification() {
                 supabase.from('notifications').select('*').eq('user_id', user!.id).eq('read', false).order('created_at', { ascending: false }),
                 supabase.from('market_scores').select('market_id, score, markets(name)').eq('user_id', user!.id).gt('score', 0).order('score', { ascending: false }),
                 supabase.from('markets').select('id, name, latitude, longitude'),
-                supabase.from('market_scores').select('market_id, score, user_id, profiles(display_name, avatar_url)').order('score', { ascending: false })
+                supabase.from('market_scores').select('market_id, score, user_id, profiles(display_name, avatar_url)').order('score', { ascending: false }),
+                supabase.from('shopping_lists').select('id').eq('user_id', user!.id).eq('status', 'open').limit(1)
             ]);
+
+            // Checar se tem lista ativa (Para exibir a Cesta da Vizinhança)
+            setHasActiveList(activeListsResult.data && activeListsResult.data.length > 0 ? true : false);
 
             // Processar Ranking e Pontos
             if (rankingResult.data) {
@@ -290,7 +319,6 @@ export default function Gamification() {
             if (missionsResult.data) setMissions(missionsResult.data || []);
             // @ts-ignore
             if (notifsResult.data) setNotifications(notifsResult.data || []);
-            // removido o setTerritories antigo daqui pois agora está dentro do bloco acima
 
         } catch (error) {
             console.error("Erro ao carregar dados:", error);
@@ -304,6 +332,205 @@ export default function Gamification() {
         await supabase.from('notifications').update({ read: true }).eq('id', id);
     };
 
+    // --- CESTA DA VIZINHANÇA (Antigo Supply Drop) ---
+    const handleOpenSupplyDrop = async () => {
+        setSupplyDropOpen(true);
+        if (supplyItems.length > 0) return;
+
+        if (userLocation) {
+            // Chama a RPC que criamos (agora com calculate_distance funcionando)
+            const { data, error } = await supabase.rpc('get_regional_trends', {
+                user_lat: userLocation.lat,
+                user_lon: userLocation.lng,
+                radius_km: 10
+            });
+
+            if (data) {
+                // @ts-ignore
+                setSupplyItems(data);
+            }
+        }
+    };
+
+    const handleClaimSupplyDrop = async () => {
+        if (!user || supplyItems.length === 0) return;
+        setClaimingSupply(true);
+
+        try {
+            // 1. Criar Lista
+            const now = new Date();
+            const listName = `Cesta da Vizinhança ${now.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })}`;
+
+            const { data: newList, error: listError } = await supabase
+                .from('shopping_lists')
+                .insert({ name: listName, user_id: user.id, status: 'open' })
+                .select()
+                .single();
+
+            if (listError) throw listError;
+
+            // 2. Inserir Itens
+            const itemsToInsert = supplyItems.map(item => ({
+                list_id: newList.id,
+                product_id: item.product_id,
+                quantity: 1,
+                is_checked: false
+            }));
+
+            const { error: itemsError } = await supabase.from('list_items').insert(itemsToInsert);
+            if (itemsError) throw itemsError;
+
+            toast({
+                title: "Lista Criada com Sucesso! 🛒",
+                description: `${itemsToInsert.length} itens adicionados baseados na comunidade.`,
+                className: "bg-green-600 text-white border-none"
+            });
+
+            setSupplyDropOpen(false);
+            navigate(`/lista/${newList.id}`);
+
+        } catch (error) {
+            console.error(error);
+            toast({ title: "Erro ao criar lista", variant: "destructive" });
+        } finally {
+            setClaimingSupply(false);
+        }
+    };
+
+    // --- HANDLERS DE GRAVAÇÃO (RÁDIO DE MISSÃO) ---
+    const handleStartRecording = async () => {
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            streamRef.current = stream; // Salva para matar depois
+
+            const recorder = new MediaRecorder(stream);
+            mediaRecorderRef.current = recorder;
+            audioChunksRef.current = [];
+
+            recorder.ondataavailable = (event) => {
+                if (event.data.size > 0) {
+                    audioChunksRef.current.push(event.data);
+                }
+            };
+
+            recorder.onstop = handleProcessRecording;
+            recorder.start();
+            setIsRecording(true);
+
+            // Feedback tátil
+            if (navigator.vibrate) navigator.vibrate(50);
+
+        } catch (error) {
+            console.error("Erro ao acessar microfone:", error);
+            toast({
+                title: "Permissão Necessária",
+                description: "Precisamos do microfone para ouvir sua lista.",
+                variant: "destructive"
+            });
+        }
+    };
+
+    const handleStopRecording = () => {
+        if (mediaRecorderRef.current && isRecording) {
+            mediaRecorderRef.current.stop();
+            setIsRecording(false);
+            if (navigator.vibrate) navigator.vibrate([50, 50, 50]);
+
+            if (streamRef.current) {
+                streamRef.current.getTracks().forEach(track => track.stop());
+                streamRef.current = null;
+            }
+        }
+    };
+
+    const handleProcessRecording = async () => {
+        if (audioChunksRef.current.length === 0) return;
+        setIsProcessingAudio(true);
+
+        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+        const reader = new FileReader();
+        reader.readAsDataURL(audioBlob);
+        reader.onloadend = async () => {
+            const base64Audio = (reader.result as string).split(',')[1];
+
+            try {
+                toast({ title: "Ouvindo...", description: "Processando seus itens." });
+
+                // 1. Transcrever (Whisper)
+                const { data: transcriptData, error: transcriptError } = await supabase.functions.invoke('transcribe-audio', {
+                    body: { audioBase64: base64Audio }
+                });
+
+                if (transcriptError) throw transcriptError;
+                if (!transcriptData.text) throw new Error("Não entendi o que foi falado.");
+
+                const text = transcriptData.text;
+                toast({ title: "Entendido!", description: `Criando lista com: "${text.substring(0, 20)}..."` });
+
+                // 2. Estruturar Lista (GPT-4o)
+                const { data: aiData, error: aiError } = await supabase.functions.invoke('parse-smart-list', {
+                    body: { text }
+                });
+
+                if (aiError) throw aiError;
+                if (!aiData.items || aiData.items.length === 0) throw new Error("Nenhum item identificado.");
+
+                // 3. Criar a Lista no Banco (Com hora para evitar duplicidade)
+                const now = new Date();
+                const timeStr = now.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+                const listName = `Lista de Voz ${now.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })} ${timeStr}`;
+
+                const { data: newList, error: createListError } = await supabase
+                    .from('shopping_lists')
+                    .insert({ name: listName, user_id: user!.id, status: 'open' })
+                    .select()
+                    .single();
+
+                if (createListError) throw createListError;
+
+                // 4. Match & Insert Items (RPC)
+                const { data: processedItems, error: dbError } = await supabase
+                    .rpc('match_and_create_products', {
+                        items_in: aiData.items
+                    });
+
+                if (dbError) throw dbError;
+
+                // 5. Inserir Itens na Lista (Fallback quantity = 1)
+                const listItemsToInsert = (processedItems as any[]).map(item => ({
+                    list_id: newList.id,
+                    product_id: item.product_id,
+                    quantity: item.quantity || 1,
+                    is_checked: false
+                }));
+
+                const { error: insertError } = await supabase
+                    .from('list_items')
+                    .insert(listItemsToInsert);
+
+                if (insertError) throw insertError;
+
+                toast({
+                    title: "Lista Pronta!",
+                    description: `${listItemsToInsert.length} itens adicionados.`,
+                    className: "bg-green-600 text-white border-none"
+                });
+
+                navigate(`/lista/${newList.id}`);
+
+            } catch (error: any) {
+                console.error("Erro na missão de voz:", error);
+                toast({
+                    title: "Não entendi",
+                    description: "Tente falar um pouco mais devagar.",
+                    variant: "destructive"
+                });
+            } finally {
+                setIsProcessingAudio(false);
+            }
+        };
+    };
+
     if (authLoading) return <div className="min-h-screen flex items-center justify-center"><Loader2 className="w-10 h-10 animate-spin text-primary" /></div>;
 
     const topThree = leaderboard.slice(0, 3);
@@ -311,7 +538,7 @@ export default function Gamification() {
 
     return (
         <div className="min-h-screen bg-gray-50 pb-32">
-            {/* CSS: Remoção de Legendas + Efeito de Card Quebrado */}
+            {/* CSS: Remoção de Legendas + Efeito de Card Quebrado + Animação Gravação + Float */}
             <style>
                 {`
                     .gmnoprint a, .gmnoprint span, .gm-style-cc {
@@ -338,7 +565,6 @@ export default function Gamification() {
                         border-color: theme('colors.red.300') !important;
                         box-shadow: inset 0 4px 6px -1px rgb(0 0 0 / 0.1), inset 0 2px 4px -2px rgb(0 0 0 / 0.1) !important;
                     }
-                    /* Fissura principal */
                     .card-broken::before {
                         content: '';
                         position: absolute;
@@ -351,7 +577,6 @@ export default function Gamification() {
                         pointer-events: none;
                         transition: all 0.3s ease;
                     }
-                    /* Fissura secundária */
                     .card-broken::after {
                          content: '';
                          position: absolute;
@@ -368,6 +593,22 @@ export default function Gamification() {
                         opacity: 0.3;
                         transform: scale(1.02) rotate(1deg);
                     }
+
+                    /* ANIMAÇÃO DE PULSO PARA GRAVAÇÃO */
+                    @keyframes pulse-ring {
+                        0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7); }
+                        70% { transform: scale(1); box-shadow: 0 0 0 15px rgba(239, 68, 68, 0); }
+                        100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
+                    }
+                    .recording-active { animation: pulse-ring 2s infinite; }
+
+                    /* ANIMAÇÃO FLUTUANTE PARA CESTA DA VIZINHANÇA */
+                    @keyframes float {
+                        0% { transform: translateY(0px) translateX(-50%); }
+                        50% { transform: translateY(-10px) translateX(-50%); }
+                        100% { transform: translateY(0px) translateX(-50%); }
+                    }
+                    .animate-float { animation: float 3s ease-in-out infinite; }
                 `}
             </style>
 
@@ -443,6 +684,32 @@ export default function Gamification() {
                                         <div className="relative w-10 h-10 flex items-center justify-center pointer-events-none">
                                             <div className="absolute w-[200%] h-[200%] border border-green-500/30 rounded-full animate-ping"></div>
                                             <div className="w-4 h-4 bg-green-500 rounded-full border-2 border-white shadow-[0_0_15px_#22c55e] z-10"></div>
+                                        </div>
+                                    </OverlayView>
+                                )}
+
+                                {/* --- CESTA DA VIZINHANÇA INTEGRADA AO MAPA --- */}
+                                {!hasActiveList && userLocation && !loading && (
+                                    <OverlayView
+                                        position={userLocation}
+                                        mapPaneName={OverlayView.OVERLAY_MOUSE_TARGET}
+                                        getPixelPositionOffset={() => ({ x: 0, y: -80 })} // Flutua ACIMA do usuário
+                                    >
+                                        <div
+                                            className="cursor-pointer animate-float group"
+                                            onClick={handleOpenSupplyDrop}
+                                        >
+                                            <div className="flex flex-col items-center">
+                                                <div className="bg-sky-500 text-white text-[9px] font-bold px-2 py-0.5 rounded-full mb-1 shadow-lg border border-white/20 whitespace-nowrap animate-bounce">
+                                                    CESTA POPULAR
+                                                </div>
+                                                <div className="bg-gradient-to-b from-sky-400 to-blue-600 p-2.5 rounded-xl shadow-2xl border-2 border-white relative hover:scale-110 transition-transform">
+                                                    <ShoppingBasket className="w-6 h-6 text-white" />
+                                                    <div className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-red-500 rounded-full border border-white animate-pulse"></div>
+                                                </div>
+                                                {/* Corda/Seta visual */}
+                                                <div className="w-0.5 h-4 bg-white/50 -mt-1"></div>
+                                            </div>
                                         </div>
                                     </OverlayView>
                                 )}
@@ -576,7 +843,7 @@ export default function Gamification() {
                     </div>
                 </section>
 
-                {/* 5. RANKING (CLEAN) - CORRIGIDO IMAGENS ESTICADAS */}
+                {/* 5. RANKING (CLEAN) */}
                 <section className="pb-6">
                     <div className="flex items-center gap-2 mb-3 px-1">
                         <Flame className="w-5 h-5 text-gray-400" />
@@ -590,7 +857,6 @@ export default function Gamification() {
                                     <div key={player.user_id} className={cn("flex items-center justify-between p-3", player.user_id === user?.id ? "bg-blue-50/50" : "")}>
                                         <div className="flex items-center gap-3">
                                             <span className={cn("font-bold w-4 text-center text-xs", idx < 3 ? "text-gray-900" : "text-gray-400")}>{idx + 1}</span>
-                                            {/* CORREÇÃO AQUI: Avatar com overflow hidden e imagem com object-cover */}
                                             <Avatar className="w-8 h-8 border border-gray-100 overflow-hidden">
                                                 <AvatarImage src={player.avatar_url} className="w-full h-full object-cover" />
                                                 <AvatarFallback className="text-xs bg-gray-100 text-gray-500">{player.display_name?.[0]}</AvatarFallback>
@@ -613,6 +879,88 @@ export default function Gamification() {
                 </section>
 
             </main>
+
+            {/* --- BOTÃO DE AÇÃO PRINCIPAL (RÁDIO DE MISSÃO) --- */}
+            <div className="fixed bottom-24 left-4 right-4 z-40 flex justify-center">
+                <Button
+                    className={cn(
+                        "h-16 w-full max-w-sm rounded-full shadow-xl transition-all duration-300 flex items-center justify-center gap-3 border-4",
+                        isRecording
+                            ? "bg-red-500 hover:bg-red-600 border-red-200 recording-active"
+                            : isProcessingAudio
+                                ? "bg-indigo-600 border-indigo-200 opacity-90"
+                                : "bg-gradient-to-r from-yellow-500 to-amber-500 hover:from-yellow-400 hover:to-amber-400 border-white text-slate-900"
+                    )}
+                    onPointerDown={handleStartRecording}
+                    onPointerUp={handleStopRecording}
+                    onPointerLeave={handleStopRecording}
+                    disabled={isProcessingAudio}
+                >
+                    {isProcessingAudio ? (
+                        <>
+                            <Loader2 className="w-6 h-6 animate-spin text-white" />
+                            <span className="text-white font-bold uppercase tracking-wide">Criando Lista...</span>
+                        </>
+                    ) : isRecording ? (
+                        <>
+                            <Square className="w-6 h-6 fill-white text-white" />
+                            <span className="text-white font-bold uppercase tracking-wide">Solte para Enviar</span>
+                        </>
+                    ) : (
+                        <>
+                            <Mic className="w-6 h-6" />
+                            <div className="flex flex-col items-start leading-none">
+                                <span className="font-bold text-sm uppercase tracking-wider">Segure para Falar</span>
+                                <span className="text-[10px] opacity-80 font-medium">Crie sua lista por voz</span>
+                            </div>
+                        </>
+                    )}
+                </Button>
+            </div>
+
+            {/* DIALOG DA CESTA DA VIZINHANÇA (ANTIGO SUPPLY DROP) */}
+            <Dialog open={supplyDropOpen} onOpenChange={setSupplyDropOpen}>
+                <DialogContent className="max-w-xs rounded-2xl p-0 overflow-hidden bg-slate-900 text-white border-slate-700">
+                    <div className="bg-gradient-to-br from-sky-500 to-blue-700 p-6 flex flex-col items-center justify-center">
+                        <ShoppingBasket className="w-16 h-16 text-white mb-2 animate-bounce" />
+                        <DialogTitle className="text-xl font-bold font-display text-center text-white">Cesta da Vizinhança</DialogTitle>
+                        <DialogDescription className="text-sky-100 text-center text-xs">
+                            Estes são os produtos mais comprados pelas pessoas aqui perto.
+                        </DialogDescription>
+                    </div>
+
+                    <div className="p-4 max-h-[40vh] overflow-y-auto">
+                        {supplyItems.length > 0 ? (
+                            <div className="space-y-2">
+                                {supplyItems.map((item) => (
+                                    <div key={item.product_id} className="flex items-center justify-between p-2 bg-slate-800 rounded-lg border border-slate-700">
+                                        <div className="flex items-center gap-3">
+                                            <Package className="w-4 h-4 text-sky-400" />
+                                            <span className="text-sm font-medium">{item.product_name}</span>
+                                        </div>
+                                        <Badge variant="secondary" className="bg-slate-700 text-slate-300 text-[10px]">{item.popularity} compras</Badge>
+                                    </div>
+                                ))}
+                            </div>
+                        ) : (
+                            <div className="flex flex-col items-center justify-center py-4 text-slate-400 gap-2">
+                                <Loader2 className="w-6 h-6 animate-spin" />
+                                <span className="text-xs">Buscando itens populares...</span>
+                            </div>
+                        )}
+                    </div>
+
+                    <DialogFooter className="p-4 bg-slate-950 border-t border-slate-800">
+                        <Button
+                            className="w-full bg-sky-500 hover:bg-sky-400 text-white font-bold h-12"
+                            onClick={handleClaimSupplyDrop}
+                            disabled={supplyItems.length === 0 || claimingSupply}
+                        >
+                            {claimingSupply ? <Loader2 className="w-5 h-5 animate-spin" /> : "ADICIONAR À MINHA LISTA"}
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
 
             {/* SHEET DE DETALHES DO MAPA (PAINEL TÁTICO) */}
             <Sheet open={!!selectedMarket} onOpenChange={(open) => !open && setSelectedMarket(null)}>
